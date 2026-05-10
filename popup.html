@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>YCUT Blue User Scanner</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        margin: 12px;
+        width: 300px;
+      }
+      h1 { font-size: 16px; margin: 0 0 8px 0; }
+      button {
+        appearance: none;
+        border: 1px solid #ddd;
+        background: #fff;
+        padding: 6px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover { background: #f6f6f6; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 8px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 12px;
+      }
+      .row { display:flex; gap:8px; margin:8px 0; }
+      .muted { font-size: 12px; color: #666; }
+      .status { font-size: 12px; margin-top: 6px; line-height: 1.45; }
+      .ok { color: #12805c; }
+      .bad { color: #c62828; }
+      .box { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fafafa; }
+    </style>
+  </head>
+  <body>
+    <h1>YCUT 藍色小人工具</h1>
+
+    <div class="box">
+      <div class="muted">授權序號</div>
+      <input id="licenseKey" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off">
+      <div class="row">
+        <button id="activate">啟用 / 驗證</button>
+      </div>
+      <div id="licenseStatus" class="status muted">正在檢查授權...</div>
+    </div>
+
+    <div class="row">
+      <button id="scan">重新掃描</button>
+      <button id="toggle">切換高亮</button>
+    </div>
+
+    <p class="muted">僅在 <code>Community.aspx</code> 頁面生效。</p>
+    <script src="popup.js"></script>
+  </body>
+</html>
