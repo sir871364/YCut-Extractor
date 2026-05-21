@@ -7,7 +7,7 @@
       body {
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
         margin: 12px;
-        width: 300px;
+        width: 320px;
       }
       h1 { font-size: 16px; margin: 0 0 8px 0; }
       button {
@@ -20,32 +20,51 @@
       }
       button:hover { background: #f6f6f6; }
       button:disabled { opacity: .45; cursor: not-allowed; }
-      input {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 7px 8px;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        font-size: 12px;
-      }
       .row { display:flex; gap:8px; margin:8px 0; }
       .muted { font-size: 12px; color: #666; }
       .status { font-size: 12px; margin-top: 6px; line-height: 1.45; }
       .ok { color: #12805c; }
       .bad { color: #c62828; }
       .box { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fafafa; }
+      .qr-box {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 210px;
+        background: #fff;
+        border: 1px solid #eee;
+        border-radius: 10px;
+        margin: 8px 0;
+      }
+      .qr-box img {
+        width: 200px;
+        height: 200px;
+      }
+      .timer {
+        font-size: 12px;
+        color: #555;
+        margin-top: 6px;
+      }
+      .install-id {
+        font-size: 11px;
+        color: #777;
+        word-break: break-all;
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
     <h1>YCUT 藍色小人工具</h1>
 
-    <div class="box">
-      <div class="muted">授權序號</div>
-      <input id="licenseKey" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off">
+    <div id="licensePanel" class="box">
+      <div class="muted">請管理員掃描 QR Code 核准</div>
+      <div class="qr-box"><img id="licenseQr" alt="授權 QR Code"></div>
       <div class="row">
-        <button id="activate">啟用 / 驗證</button>
+        <button id="refreshQrBtn" type="button">重新產生 QR Code</button>
       </div>
       <div id="licenseStatus" class="status muted">正在檢查授權...</div>
+      <div id="qrTimer" class="timer">--:--</div>
+      <div id="installIdText" class="install-id"></div>
     </div>
 
     <div class="row">

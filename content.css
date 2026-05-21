@@ -34,7 +34,7 @@
   padding: 10px 12px;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  min-width: 240px;
+  min-width: 260px;
 }
 #ycut-blue-user-panel h4 {
   margin: 0 0 8px 0;
@@ -64,65 +64,18 @@
   font-weight: 700;
   color: #93c5fd;
 }
-/* 小人高亮框線 */
-.ycut-blue-user-highlight {
-  outline: 3px solid #2d7cff !important;
-  outline-offset: 2px;
-  border-radius: 6px;
-  transition: outline-color 120ms ease;
-}
-
-/* 小人徽章 */
-.ycut-blue-user-badge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  padding: 2px 6px;
+#ycut-progress {
   font-size: 12px;
-  background: #2d7cff;
-  color: #fff;
-  border-radius: 999px;
-  line-height: 1;
-  z-index: 2147483647;
-  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+  opacity: .8;
+  margin-top: 4px;
 }
 
-/* 浮動面板 */
-#ycut-blue-user-panel {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 2147483647;
-  background: #111827;
-  color: #f9fafb;
-  border: 1px solid #374151;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-  box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  min-width: 260px;
-}
-#ycut-blue-user-panel h4 { margin: 0 0 8px 0; font-size: 14px; font-weight: 700; }
-#ycut-blue-user-panel .row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin: 6px 0;
-}
-#ycut-blue-user-panel button {
-  appearance: none; border: none; padding: 6px 10px; border-radius: 8px;
-  cursor: pointer; background: #1f2937; color: #e5e7eb;
-}
-#ycut-blue-user-panel button:hover { background: #374151; }
-#ycut-blue-user-panel .count { font-weight: 700; color: #93c5fd; }
-#ycut-progress { font-size: 12px; opacity: .8; margin-top: 4px; }
-/* === 把 I智慧 的灰色全畫面遮罩改成透明 === */
-/* 這些 class 名稱跟程式裡 pageIsBusy() 用的是同一批 */
+/* 把 I智慧 的灰色全畫面遮罩改成透明 */
 .blockUI,
 .ui-blockui,
 .blockOverlay,
 .modal-backdrop {
   background: transparent !important;
   opacity: 0 !important;
-  pointer-events: none !important;  /* 讓遮罩不吃點擊 */
+  pointer-events: none !important;
 }
-
-
