@@ -4,6 +4,7 @@ const PRODUCT_ID = 'ycut_extractor';
 
 const QR_LIFETIME_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 5000;
+const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +45,21 @@ async function getOrCreateInstallId() {
   const installId = crypto.randomUUID();
   await chrome.storage.local.set({ install_id: installId });
   return installId;
+}
+
+async function hasFreshLicenseCache(installId) {
+  const stored = await chrome.storage.local.get([
+    'license_status',
+    'qr_licensed_install_id',
+    'last_verified_at'
+  ]);
+
+  if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
+    return false;
+  }
+
+  const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
+  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
 }
 
 async function checkQrLicenseStatus() {
@@ -149,6 +165,14 @@ function startPollingApproval() {
 
 async function loadLicenseState() {
   setToolEnabled(false);
+  const installId = await getOrCreateInstallId();
+
+  if (await hasFreshLicenseCache(installId)) {
+    setToolEnabled(true);
+    setStatus('授權快取有效。', true);
+    hideLicensePanel();
+    return;
+  }
 
   try {
     const ok = await checkQrLicenseStatus();
@@ -159,9 +183,7 @@ async function loadLicenseState() {
       return;
     }
   } catch (e) {
-    const stored = await chrome.storage.local.get(['license_status', 'qr_licensed_install_id']);
-    const installId = await getOrCreateInstallId();
-    if (stored.license_status === 'valid' && stored.qr_licensed_install_id === installId) {
+    if (await hasFreshLicenseCache(installId)) {
       setToolEnabled(true);
       setStatus('授權有效。', true);
       hideLicensePanel();

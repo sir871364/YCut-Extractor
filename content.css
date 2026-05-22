@@ -6,6 +6,37 @@
   transition: outline-color 120ms ease;
 }
 
+td.ycut-extract-active {
+  outline: 3px solid #2d7cff !important;
+  outline-offset: -3px;
+  background: rgba(45, 124, 255, .14) !important;
+  box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .28), 0 0 0 4px rgba(45, 124, 255, .12);
+  animation: ycut-active-pulse 1.2s ease-in-out infinite;
+}
+
+td.ycut-extract-done {
+  outline: 3px solid #16a34a !important;
+  outline-offset: -3px;
+  background: rgba(22, 163, 74, .16) !important;
+  box-shadow: inset 0 0 0 2px rgba(22, 163, 74, .24);
+}
+
+td.ycut-extract-failed {
+  outline: 3px solid #dc2626 !important;
+  outline-offset: -3px;
+  background: rgba(220, 38, 38, .14) !important;
+  box-shadow: inset 0 0 0 2px rgba(220, 38, 38, .24);
+}
+
+@keyframes ycut-active-pulse {
+  0%, 100% {
+    box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .28), 0 0 0 4px rgba(45, 124, 255, .10);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .42), 0 0 0 7px rgba(45, 124, 255, .18);
+  }
+}
+
 /* 小人右上角徽章 */
 .ycut-blue-user-badge {
   position: absolute;
@@ -68,6 +99,47 @@
   font-size: 12px;
   opacity: .8;
   margin-top: 4px;
+}
+#ycut-progress-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+}
+#ycut-progress-box:not(.is-working) {
+  opacity: .82;
+}
+#ycut-progress-box .ycut-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #bfdbfe;
+  font-weight: 700;
+}
+.ycut-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #1f2937;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+#ycut-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2d7cff, #22c55e);
+  transition: width 220ms ease;
+}
+#ycut-progress-bar.is-complete {
+  background: #16a34a;
+}
+#ycut-progress-stage {
+  overflow: hidden;
+  color: #e5e7eb;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 把 I智慧 的灰色全畫面遮罩改成透明 */

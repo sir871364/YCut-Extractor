@@ -3,6 +3,7 @@ export const STATE = {
   highlighted: false,
   observer: null,
   acting: false,
+  extractStartedAt: 0,
   autoFollow: true,
   doorplateSelectEnabled: false,
   selectedColIdx: new Set(),

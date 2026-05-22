@@ -6,6 +6,7 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     highlighted: false,
     observer: null,
     acting: false,
+    extractStartedAt: 0,
     autoFollow: true,
     doorplateSelectEnabled: false,
     selectedColIdx: /* @__PURE__ */ new Set(),
@@ -209,14 +210,85 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     const el = document.getElementById("ycut-progress");
     if (el) el.textContent = text;
   }
+  function ensureProgressUi() {
+    const panel = document.getElementById("ycut-blue-user-panel");
+    if (!panel) return null;
+    let box = document.getElementById("ycut-progress-box");
+    if (box) return box;
+    box = document.createElement("div");
+    box.id = "ycut-progress-box";
+    box.innerHTML = `
+    <div class="ycut-progress-meta">
+      <span id="ycut-progress-count">0/0</span>
+      <span id="ycut-progress-eta">\u4F30\u7B97\u4E2D</span>
+    </div>
+    <div class="ycut-progress-track">
+      <div id="ycut-progress-bar"></div>
+    </div>
+    <div id="ycut-progress-stage">\u72C0\u614B\uFF1A\u5F85\u547D</div>
+  `;
+    const progress = document.getElementById("ycut-progress");
+    if (progress && progress.parentNode) {
+      progress.parentNode.insertBefore(box, progress.nextSibling);
+    } else {
+      panel.appendChild(box);
+    }
+    return box;
+  }
+  function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+  function formatEta(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return "\u4F30\u7B97\u4E2D";
+    const sec = Math.ceil(ms / 1e3);
+    if (sec < 60) return `\u7D04 ${sec} \u79D2`;
+    const min = Math.floor(sec / 60);
+    const remain = sec % 60;
+    return remain ? `\u7D04 ${min} \u5206 ${remain} \u79D2` : `\u7D04 ${min} \u5206`;
+  }
   function setPanelWorking(working, text) {
     STATE.acting = working;
+    ensureProgressUi();
     const el = document.getElementById("ycut-progress");
-    if (el) el.textContent = text || (working ? "\u57F7\u884C\u4E2D\u2026" : "\u5F85\u547D");
+    if (el) el.textContent = text || (working ? "\u57F7\u884C\u4E2D..." : "\u5F85\u547D");
+    const box = document.getElementById("ycut-progress-box");
+    if (box) box.classList.toggle("is-working", !!working);
   }
-  function updatePanelProgress(done, total) {
+  function updatePanelProgress(done, total, detail = {}) {
+    ensureProgressUi();
+    const startedAt = detail.startedAt || STATE.extractStartedAt || Date.now();
+    const percent = total ? Math.round(done / total * 100) : 0;
+    const elapsed = Date.now() - startedAt;
+    const eta = done > 0 && done < total ? formatEta(elapsed / done * (total - done)) : done >= total && total > 0 ? "\u5B8C\u6210" : "\u4F30\u7B97\u4E2D";
     const el = document.getElementById("ycut-progress");
-    if (el) el.textContent = `\u9032\u5EA6\uFF1A${done}/${total}`;
+    if (el) el.textContent = detail.title || "\u64F7\u53D6 PDF \u4E2D";
+    setText("ycut-progress-count", `${done}/${total} \xB7 ${percent}%`);
+    setText("ycut-progress-eta", eta);
+    setText("ycut-progress-stage", `\u72C0\u614B\uFF1A${detail.stage || "\u57F7\u884C\u4E2D"}`);
+    const bar = document.getElementById("ycut-progress-bar");
+    if (bar) {
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      bar.classList.toggle("is-complete", done >= total && total > 0);
+    }
+  }
+  function resetPanelProgress(total, detail = {}) {
+    STATE.extractStartedAt = Date.now();
+    updatePanelProgress(0, total, {
+      title: detail.title || "\u64F7\u53D6 PDF \u4E2D",
+      current: detail.current || "-",
+      stage: detail.stage || "\u6E96\u5099\u4E2D",
+      startedAt: STATE.extractStartedAt
+    });
+  }
+  function markAnchorExtractionState(anchor, state) {
+    const cell = anchor?.closest?.("td");
+    if (!cell) return;
+    cell.classList.remove("ycut-extract-active", "ycut-extract-done", "ycut-extract-failed");
+    if (state) cell.classList.add(`ycut-extract-${state}`);
+  }
+  function clearExtractionStates() {
+    document.querySelectorAll(".ycut-extract-active,.ycut-extract-done,.ycut-extract-failed").forEach((el) => el.classList.remove("ycut-extract-active", "ycut-extract-done", "ycut-extract-failed"));
   }
   function mountPanel({
     onScan,
@@ -262,6 +334,7 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     <div style="font-size:12px;opacity:.75;margin-top:6px;">\u5FEB\u6377\u9375\uFF1AAlt+Shift+U \u9AD8\u4EAE</div>
   `;
     document.body.appendChild(panel);
+    ensureProgressUi();
     panel.querySelector("#ycut-scan").addEventListener("click", onScan);
     panel.querySelector("#ycut-highlight").addEventListener("click", onHighlight);
     panel.querySelector("#ycut-auto-follow").addEventListener("click", () => {
@@ -566,6 +639,29 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       inline: "nearest"
     });
   }
+  function describeAnchor(anchor) {
+    const cell = anchor?.closest?.("td");
+    const row = cell?.closest?.("tr");
+    const table = cell?.closest?.("table");
+    const area = getAreaFromAnchor(anchor);
+    const floor = row?.querySelector?.("th")?.textContent?.trim() || row?.children?.[0]?.textContent?.trim() || "";
+    let doorplate = "";
+    if (cell && table) {
+      const colIndex = cell.cellIndex;
+      const rows = Array.from(table.querySelectorAll("tr"));
+      for (const headerRow of rows) {
+        const headerCell = headerRow.children?.[colIndex];
+        const text = headerCell?.textContent?.replace(/\s+/g, " ").trim();
+        if (text && text.includes("\u865F")) {
+          doorplate = text.replace(/^選\s*/, "");
+          break;
+        }
+      }
+    }
+    const parts = [doorplate, floor].filter(Boolean);
+    if (area != null) parts.push(`\u5EFA\u576A ${area}`);
+    return parts.length ? parts.join(" / ") : (cell?.textContent || anchor?.textContent || "").replace(/\s+/g, " ").trim() || "\u672A\u547D\u540D\u6236\u5225";
+  }
   function buildCandidates() {
     const { min, max } = getAreaFilterFromPanel();
     return Array.from(STATE.nodes).filter((a) => {
@@ -591,23 +687,44 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     const candidates = buildCandidates();
     if (!candidates.length) {
       setPanelStatus("\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225");
-      alert("\u7BE9\u9078\u5F8C\u6C92\u6709\u4EFB\u4F55\u7B26\u5408\u5EFA\u576A\u5340\u9593\u7684\u6236\u5225\u3002");
+      alert("\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225\uFF0C\u8ACB\u8ABF\u6574\u689D\u4EF6\u5F8C\u518D\u8A66\u3002");
       return;
     }
     STATE.acting = true;
     const total = candidates.length;
-    setPanelWorking(true, `\u64F7\u53D6 PDF \u4E2D\u2026\uFF08\u7BE9\u9078\u5F8C ${total} \u6236\uFF09`);
+    clearExtractionStates();
+    setPanelWorking(true, `\u64F7\u53D6 PDF \u4E2D\uFF08\u7BE9\u9078\u5F8C ${total} \u6236\uFF09`);
+    resetPanelProgress(total, {
+      title: "\u64F7\u53D6 PDF \u4E2D",
+      stage: "\u6E96\u5099\u958B\u59CB"
+    });
     const urls = [];
     const failed = [];
     for (let idx = 0; idx < total; idx++) {
       const a = candidates[idx];
-      updatePanelProgress(idx, total);
-      followAnchor(a);
-      await closeCurrentModalIfAny();
-      await waitForPageIdle(perItemTimeout);
+      const current = describeAnchor(a);
       let got = null;
       let lastError = "";
+      markAnchorExtractionState(a, "active");
+      updatePanelProgress(idx, total, {
+        title: "\u64F7\u53D6 PDF \u4E2D",
+        current,
+        stage: "\u5B9A\u4F4D\u76EE\u524D\u6236\u5225"
+      });
+      followAnchor(a);
+      await closeCurrentModalIfAny();
+      updatePanelProgress(idx, total, {
+        title: "\u64F7\u53D6 PDF \u4E2D",
+        current,
+        stage: "\u7B49\u5F85\u9801\u9762\u9592\u7F6E"
+      });
+      await waitForPageIdle(perItemTimeout);
       try {
+        updatePanelProgress(idx, total, {
+          title: "\u64F7\u53D6 PDF \u4E2D",
+          current,
+          stage: "\u5617\u8A66 API \u64F7\u53D6"
+        });
         got = (await getPdfByApi(a)).url;
       } catch (e) {
         lastError = e?.message || "API \u64F7\u53D6\u5931\u6557";
@@ -615,41 +732,86 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       for (let attempt = 0; attempt <= retries && !got; attempt++) {
         let modal = null;
         try {
+          updatePanelProgress(idx, total, {
+            title: "\u64F7\u53D6 PDF \u4E2D",
+            current,
+            stage: `\u958B\u555F\u5C0F\u4EBA\u9078\u55AE\uFF08\u7B2C ${attempt + 1} \u6B21\uFF09`
+          });
           const previousHref = extractPdfHrefFromModal(visibleModal());
           const result = await clickFirstOwnerAndWaitModal(a);
           modal = result.modal || visibleModal();
-          if (!result.opened) lastError = "\u672A\u958B\u555F\u660E\u7D30";
+          if (!result.opened) lastError = "\u7121\u6CD5\u958B\u555F\u5C0F\u4EBA\u9078\u55AE";
+          updatePanelProgress(idx, total, {
+            title: "\u64F7\u53D6 PDF \u4E2D",
+            current,
+            stage: "\u7B49\u5F85 PDF \u9023\u7D50"
+          });
           const hrefReady = await waitForValidPdfHref(modal || null, perItemTimeout, previousHref);
           const fallbackHref = extractPdfHrefFromModal(modal || null);
           got = hrefReady || (fallbackHref && fallbackHref !== previousHref ? fallbackHref : null);
+          updatePanelProgress(idx, total, {
+            title: "\u64F7\u53D6 PDF \u4E2D",
+            current,
+            stage: "\u78BA\u8A8D\u9801\u9762\u72C0\u614B"
+          });
           await waitForPageIdle(perItemTimeout);
           if (!got) {
             lastError = "\u627E\u4E0D\u5230 PDF \u9023\u7D50";
             await sleep(300);
           }
         } catch (e) {
-          lastError = e?.message || "\u64F7\u53D6\u4F8B\u5916";
+          lastError = e?.message || "\u64F7\u53D6\u5931\u6557";
           await sleep(300);
         } finally {
           if (collapseAfter) await closeAfterExtraction(a, modal);
         }
       }
-      if (got && isValidPdfHref(got)) urls.push(got);
-      else failed.push({ index: idx + 1, text: (a.textContent || "").trim(), reason: lastError || "\u672A\u77E5\u539F\u56E0" });
-      updatePanelProgress(idx + 1, total);
+      if (got && isValidPdfHref(got)) {
+        urls.push(got);
+        markAnchorExtractionState(a, "done");
+      } else {
+        markAnchorExtractionState(a, "failed");
+        failed.push({ index: idx + 1, text: current, reason: lastError || "\u672A\u77E5\u932F\u8AA4" });
+      }
+      updatePanelProgress(idx + 1, total, {
+        title: "\u64F7\u53D6 PDF \u4E2D",
+        current,
+        stage: got && isValidPdfHref(got) ? "\u6B64\u6236\u5B8C\u6210" : "\u6B64\u6236\u5931\u6557"
+      });
       await sleep(delayBetween);
     }
     const uniq = Array.from(new Set(urls));
     downloadJson(uniq, `ycut_pdf_${Date.now()}.json`);
-    if (failed.length) log("PDF \u64F7\u53D6\u5931\u6557\u9805\u76EE", failed);
+    if (failed.length) log("PDF \u64F7\u53D6\u5931\u6557\u6E05\u55AE", failed);
     setPanelWorking(false, `\u5DF2\u64F7\u53D6 ${urls.length}/${total}\uFF0C\u4E0D\u91CD\u8907 ${uniq.length}\uFF0C\u5931\u6557 ${failed.length}`);
+    updatePanelProgress(total, total, {
+      title: "\u64F7\u53D6\u5B8C\u6210",
+      current: failed.length ? `\u5931\u6557 ${failed.length} \u6236\uFF0C\u8ACB\u67E5\u770B console` : "\u5168\u90E8\u5B8C\u6210",
+      stage: `\u6210\u529F ${urls.length}\uFF0C\u4E0D\u91CD\u8907 ${uniq.length}\uFF0C\u5931\u6557 ${failed.length}`
+    });
   }
 
   // src/license.js
+  var LICENSE_CACHE_TTL_MS = 30 * 60 * 1e3;
+  async function hasFreshLicenseCache(installId) {
+    const stored = await chrome.storage.local.get([
+      "license_status",
+      "qr_licensed_install_id",
+      "last_verified_at"
+    ]);
+    if (stored.license_status !== "valid" || stored.qr_licensed_install_id !== installId) {
+      return false;
+    }
+    const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
+    return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  }
   async function hasValidLicense() {
     try {
-      const stored = await chrome.storage.local.get(["install_id", "license_status", "qr_licensed_install_id"]);
+      const stored = await chrome.storage.local.get(["install_id"]);
       if (!stored.install_id) return false;
+      if (await hasFreshLicenseCache(stored.install_id)) {
+        return true;
+      }
       const statusUrl = `${LICENSE_STATUS_API}?product_id=${encodeURIComponent(PRODUCT_ID)}&install_id=${encodeURIComponent(stored.install_id)}`;
       const res = await fetch(statusUrl);
       const result = await res.json();
@@ -664,8 +826,8 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       await chrome.storage.local.set({ license_status: "invalid" });
       return false;
     } catch {
-      const stored = await chrome.storage.local.get(["install_id", "license_status", "qr_licensed_install_id"]);
-      return stored.license_status === "valid" && stored.qr_licensed_install_id === stored.install_id;
+      const stored = await chrome.storage.local.get(["install_id"]);
+      return !!stored.install_id && await hasFreshLicenseCache(stored.install_id);
     }
   }
   async function requireLicenseForPremiumAction() {
