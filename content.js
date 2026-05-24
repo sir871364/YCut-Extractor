@@ -793,13 +793,26 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
 
   // src/license.js
   var LICENSE_CACHE_TTL_MS = 30 * 60 * 1e3;
+  var lastLicenseCheck = null;
+  function taiwanDateString() {
+    return new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+  }
+  function isExpiredLicenseDate(expiresOn) {
+    return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || "")) || taiwanDateString() > expiresOn;
+  }
   async function hasFreshLicenseCache(installId) {
     const stored = await chrome.storage.local.get([
       "license_status",
       "qr_licensed_install_id",
-      "last_verified_at"
+      "last_verified_at",
+      "license_expires_on"
     ]);
     if (stored.license_status !== "valid" || stored.qr_licensed_install_id !== installId) {
+      return false;
+    }
+    if (isExpiredLicenseDate(stored.license_expires_on)) {
+      lastLicenseCheck = { reason: "expired", expires_on: stored.license_expires_on || null };
+      await chrome.storage.local.set({ license_status: "invalid" });
       return false;
     }
     const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
@@ -816,14 +829,20 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       const res = await fetch(statusUrl);
       const result = await res.json();
       if (result && result.success && result.active) {
+        lastLicenseCheck = result;
         await chrome.storage.local.set({
           license_status: "valid",
           qr_licensed_install_id: stored.install_id,
-          last_verified_at: (/* @__PURE__ */ new Date()).toISOString()
+          last_verified_at: (/* @__PURE__ */ new Date()).toISOString(),
+          license_expires_on: result.expires_on
         });
         return true;
       }
-      await chrome.storage.local.set({ license_status: "invalid" });
+      lastLicenseCheck = result;
+      await chrome.storage.local.set({
+        license_status: "invalid",
+        license_expires_on: result?.expires_on || null
+      });
       return false;
     } catch {
       const stored = await chrome.storage.local.get(["install_id"]);
@@ -833,6 +852,14 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
   async function requireLicenseForPremiumAction() {
     const ok = await hasValidLicense();
     if (ok) return true;
+    if (lastLicenseCheck?.reason === "expired") {
+      const expiresOn = lastLicenseCheck.expires_on || "\u8A2D\u5B9A\u671F\u9650";
+      alert(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\u3002
+
+\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u91CD\u65B0\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002`);
+      setPanelStatus(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A`);
+      return false;
+    }
     alert("\u6B64\u529F\u80FD\u9700\u8981 QR \u6388\u6B0A\u5F8C\u624D\u80FD\u4F7F\u7528\u3002\n\n\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002");
     setPanelStatus("\u5C1A\u672A QR \u6388\u6B0A\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A");
     return false;

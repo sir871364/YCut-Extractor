@@ -11,6 +11,7 @@ const $ = (id) => document.getElementById(id);
 let qrExpireAt = 0;
 let qrTimerId = null;
 let pollTimerId = null;
+let lastLicenseCheck = null;
 
 function setStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -47,14 +48,29 @@ async function getOrCreateInstallId() {
   return installId;
 }
 
+function taiwanDateString() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isExpiredLicenseDate(expiresOn) {
+  return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || '')) || taiwanDateString() > expiresOn;
+}
+
 async function hasFreshLicenseCache(installId) {
   const stored = await chrome.storage.local.get([
     'license_status',
     'qr_licensed_install_id',
-    'last_verified_at'
+    'last_verified_at',
+    'license_expires_on'
   ]);
 
   if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
+    return false;
+  }
+
+  if (isExpiredLicenseDate(stored.license_expires_on)) {
+    lastLicenseCheck = { reason: 'expired', expires_on: stored.license_expires_on || null };
+    await chrome.storage.local.set({ license_status: 'invalid' });
     return false;
   }
 
@@ -72,14 +88,21 @@ async function checkQrLicenseStatus() {
   const data = await res.json();
 
   if (data && data.success && data.active) {
+    lastLicenseCheck = data;
     await chrome.storage.local.set({
       license_status: 'valid',
       qr_licensed_install_id: installId,
-      last_verified_at: new Date().toISOString()
+      last_verified_at: new Date().toISOString(),
+      license_expires_on: data.expires_on
     });
     return true;
   }
 
+  lastLicenseCheck = data;
+  await chrome.storage.local.set({
+    license_status: 'invalid',
+    license_expires_on: data?.expires_on || null
+  });
   return false;
 }
 
@@ -105,7 +128,7 @@ function updateQrTimer() {
   }
 }
 
-async function createOrRefreshQrCode() {
+async function createOrRefreshQrCode(statusMessage = '') {
   const installId = await getOrCreateInstallId();
   const installText = $('installIdText');
   if (installText) installText.textContent = 'Install ID：' + installId;
@@ -131,7 +154,7 @@ async function createOrRefreshQrCode() {
 
     setQrImage(data.telegram_url || data.approve_url);
     qrExpireAt = Date.now() + QR_LIFETIME_MS;
-    setStatus('請管理員掃描 QR Code，並在 Telegram 輸入備註後核准。', true);
+    setStatus(statusMessage || '請管理員掃描 QR Code，並在 Telegram 輸入備註與到期日後核准。', true);
 
     if (!qrTimerId) {
       qrTimerId = setInterval(updateQrTimer, 1000);
@@ -191,7 +214,10 @@ async function loadLicenseState() {
     }
   }
 
-  await createOrRefreshQrCode();
+  const renewalMessage = lastLicenseCheck?.reason === 'expired'
+    ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請重新掃描 QR Code 授權。`
+    : '';
+  await createOrRefreshQrCode(renewalMessage);
 }
 
 async function send(tabId, msg) {
