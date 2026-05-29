@@ -48,6 +48,43 @@ async function getOrCreateInstallId() {
   return installId;
 }
 
+function setInstallIdentityText({ installId, googleEmail = '', licenseKey = '' }) {
+  const installText = $('installIdText');
+  if (!installText) return;
+
+  if (googleEmail) {
+    installText.textContent = 'Install ID：' + installId + '\nGoogle：' + googleEmail;
+    return;
+  }
+
+  installText.textContent = (licenseKey ? 'License：' + licenseKey + '\n' : '') +
+    'Install ID：' + installId;
+}
+
+async function getChromeGoogleAccount() {
+  if (!chrome.identity || !chrome.identity.getProfileUserInfo) {
+    return null;
+  }
+
+  return await new Promise((resolve) => {
+    chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (info) => {
+      if (chrome.runtime.lastError || !info || !info.id || !info.email) {
+        resolve(null);
+        return;
+      }
+
+      resolve({
+        google_sub: info.id,
+        google_email: info.email
+      });
+    });
+  });
+}
+
+function googleAccountRequiredMessage() {
+  return '請先在 Chrome 登入 Google 帳號，才能產生授權 QR Code。已授權的電腦不受影響。';
+}
+
 function taiwanDateString() {
   return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
@@ -61,7 +98,9 @@ async function hasFreshLicenseCache(installId) {
     'license_status',
     'qr_licensed_install_id',
     'last_verified_at',
-    'license_expires_on'
+    'license_expires_on',
+    'license_key',
+    'license_google_email'
   ]);
 
   if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
@@ -75,7 +114,15 @@ async function hasFreshLicenseCache(installId) {
   }
 
   const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
-  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  const fresh = Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  if (fresh) {
+    setInstallIdentityText({
+      installId,
+      googleEmail: stored.license_google_email || '',
+      licenseKey: stored.license_key || ''
+    });
+  }
+  return fresh;
 }
 
 async function checkQrLicenseStatus() {
@@ -93,7 +140,14 @@ async function checkQrLicenseStatus() {
       license_status: 'valid',
       qr_licensed_install_id: installId,
       last_verified_at: new Date().toISOString(),
-      license_expires_on: data.expires_on
+      license_expires_on: data.expires_on,
+      license_key: data.license_key || '',
+      license_google_email: data.google_email || ''
+    });
+    setInstallIdentityText({
+      installId,
+      googleEmail: data.google_email || '',
+      licenseKey: data.license_key || ''
     });
     return true;
   }
@@ -130,20 +184,33 @@ function updateQrTimer() {
 
 async function createOrRefreshQrCode(statusMessage = '') {
   const installId = await getOrCreateInstallId();
-  const installText = $('installIdText');
-  if (installText) installText.textContent = 'Install ID：' + installId;
+  const googleAccount = await getChromeGoogleAccount();
+  setInstallIdentityText({
+    installId,
+    googleEmail: googleAccount?.google_email || ''
+  });
 
   setToolEnabled(false);
+  const licenseRequestBody = {
+    install_id: installId,
+    product_id: PRODUCT_ID
+  };
+
+  if (googleAccount) {
+    licenseRequestBody.google_sub = googleAccount.google_sub;
+    licenseRequestBody.google_email = googleAccount.google_email;
+    await chrome.storage.local.set({ google_account: googleAccount });
+  } else {
+    await chrome.storage.local.remove('google_account');
+  }
+
   showLicensePanel('正在產生授權 QR Code...');
 
   try {
     const res = await fetch(LICENSE_REQUEST_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        install_id: installId,
-        product_id: PRODUCT_ID
-      })
+      body: JSON.stringify(licenseRequestBody)
     });
 
     const data = await res.json();
