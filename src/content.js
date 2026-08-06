@@ -2,10 +2,20 @@ import { STATE } from "./state.js";
 import { scan } from "./scanner.js";
 import { applyHighlight } from "./highlight.js";
 import { injectDoorplateCheckboxes, setAllDoorplateCheckboxes } from "./doorplate.js";
-import { exportPdfLinksAsJson } from "./extractor.js";
-import { requireLicenseForPremiumAction } from "./license.js";
-import { mountPanel, setPanelStatus } from "./panel.js";
+import { scanAllRoutes } from "./extractor.js";
+import { hasValidLicense, requireLicenseForPremiumAction } from "./license.js";
+import { mountPanel, setPanelStatus, setProgressMode } from "./panel.js";
 import { CONFIG } from "./config.js";
+import { buildPdfDatabase, cancelDatabaseScan, exportLastDatabaseFailures } from "./database-scanner.js";
+import {
+  DISCLAIMER_STORAGE_KEY,
+  DISCLAIMER_VERSION,
+  getDisclaimerAccepted
+} from "./disclaimer.js";
+
+let ycutInitialized = false;
+let bootstrapPromise = null;
+let authorizationRetryRequested = false;
 
 function bindHotkeys() {
   document.addEventListener("keydown", (e) => {
@@ -38,29 +48,102 @@ function mountPanelWithHandlers() {
     onDoorplateNone: () => setAllDoorplateCheckboxes(false),
     onExport: async () => {
       if (!(await requireLicenseForPremiumAction())) return;
-      exportPdfLinksAsJson({
+      setProgressMode("legacy");
+      await scanAllRoutes({
         delayBetween: CONFIG.DELAY_BETWEEN_MS,
         collapseAfter: true,
         perItemTimeout: CONFIG.PER_ITEM_TIMEOUT_MS,
         retries: CONFIG.MAX_RETRIES_PER_ITEM
       });
-    }
+    },
+    onBuildDatabase: async () => {
+      if (!(await requireLicenseForPremiumAction())) return;
+      await buildPdfDatabase();
+    },
+    onCancelDatabase: () => cancelDatabaseScan(),
+    onExportFailures: () => exportLastDatabaseFailures()
   });
 }
 
-chrome.runtime?.onMessage?.addListener?.((m) => {
-  if (!m?.type) return;
-  if (m.type === "YCUT_SCAN") { scan(); return true; }
-  if (m.type === "YCUT_TOGGLE_HIGHLIGHT") { applyHighlight(!STATE.highlighted); return true; }
-});
+function bindRuntimeMessages() {
+  chrome.runtime?.onMessage?.addListener?.((m) => {
+    if (!m?.type) return;
+    if (m.type === "YCUT_SCAN") { scan(); return true; }
+    if (m.type === "YCUT_TOGGLE_HIGHLIGHT") { applyHighlight(!STATE.highlighted); return true; }
+  });
+}
 
-function init() {
+export async function initializeYCutExtractor() {
+  if (ycutInitialized) return;
   if (!location.href.includes("Community.aspx")) return;
+  ycutInitialized = true;
+  chrome.runtime?.sendMessage?.({ type: "YCUT_AUTOCONFIRM" });
   bindHotkeys();
+  bindRuntimeMessages();
   watchDom();
   mountPanelWithHandlers();
   scan();
 }
 
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-else init();
+export async function bootstrapYCutExtractor() {
+  if (ycutInitialized) return;
+  if (bootstrapPromise) return bootstrapPromise;
+  bootstrapPromise = (async () => {
+    if (!location.href.includes("Community.aspx")) return;
+
+    let authorized = false;
+    try {
+      authorized = await hasValidLicense();
+    } catch {
+      authorized = false;
+    }
+    if (!authorized) return;
+
+    const accepted = await getDisclaimerAccepted();
+    if (!accepted) return;
+    await initializeYCutExtractor();
+  })();
+
+  try {
+    return await bootstrapPromise;
+  } finally {
+    bootstrapPromise = null;
+    if (!ycutInitialized && authorizationRetryRequested) {
+      authorizationRetryRequested = false;
+      setTimeout(() => bootstrapYCutExtractor(), 0);
+    } else {
+      authorizationRetryRequested = false;
+    }
+  }
+}
+
+chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
+  if (areaName !== "local") return;
+  const licenseBecameValid = changes.license_status?.newValue === "valid";
+  const disclaimerRecord = changes[DISCLAIMER_STORAGE_KEY]?.newValue;
+  const disclaimerWasAccepted = disclaimerRecord?.accepted === true &&
+    disclaimerRecord?.version === DISCLAIMER_VERSION;
+  if (!licenseBecameValid && !disclaimerWasAccepted) return;
+  authorizationRetryRequested = true;
+  if (!bootstrapPromise && !ycutInitialized) {
+    authorizationRetryRequested = false;
+    bootstrapYCutExtractor();
+  }
+});
+
+chrome.runtime?.onMessage?.addListener?.((message, sender, sendResponse) => {
+  if (message?.type === "YCUT_GATE_PING") {
+    sendResponse?.({ ok: true });
+    return;
+  }
+  if (message?.type === "YCUT_DISCLAIMER_ACCEPTED") {
+    bootstrapYCutExtractor().catch(() => {});
+    sendResponse?.({ ok: true });
+  }
+});
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => bootstrapYCutExtractor(), { once: true });
+} else {
+  bootstrapYCutExtractor();
+}

@@ -20,6 +20,25 @@ function ensureProgressUi() {
   box = document.createElement("div");
   box.id = "ycut-progress-box";
   box.innerHTML = `
+    <div id="ycut-legacy-progress">
+      <div id="ycut-route-current">正在掃描路段：-</div>
+      <div class="ycut-route-meta">
+        <span id="ycut-route-count">分頁進度：0 / 0</span>
+        <span id="ycut-route-found">目前找到：0</span>
+        <span id="ycut-route-failed">目前失敗：0</span>
+      </div>
+    </div>
+    <div id="ycut-database-progress" hidden>
+      <div id="ycut-db-route">目前路段：0 / 0</div>
+      <div class="ycut-database-meta">
+        <span id="ycut-db-households">掃描戶別：0 / 0</span>
+        <span id="ycut-db-success">API成功：0</span>
+        <span id="ycut-db-retries">API重試：0</span>
+        <span id="ycut-db-failed">API失敗：0</span>
+        <span id="ycut-db-pdf">有效PDF：0</span>
+        <span id="ycut-db-duplicates">重複略過：0</span>
+      </div>
+    </div>
     <div class="ycut-progress-meta">
       <span id="ycut-progress-count">0/0</span>
       <span id="ycut-progress-eta">估算中</span>
@@ -43,6 +62,55 @@ function ensureProgressUi() {
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
+}
+
+export function updateRouteProgress({ routeName = "-", index = 0, total = 0, found = 0, failed = 0 } = {}) {
+  ensureProgressUi();
+  setText("ycut-route-current", `正在掃描路段：${routeName}`);
+  setText("ycut-route-count", `分頁進度：${index} / ${total}`);
+  setText("ycut-route-found", `目前找到：${found}`);
+  setText("ycut-route-failed", `目前失敗：${failed}`);
+}
+
+export function setProgressMode(mode) {
+  ensureProgressUi();
+  const database = mode === "database";
+  const legacyBox = document.getElementById("ycut-legacy-progress");
+  const databaseBox = document.getElementById("ycut-database-progress");
+  if (legacyBox) legacyBox.hidden = database;
+  if (databaseBox) databaseBox.hidden = !database;
+}
+
+export function updateDatabaseProgress({
+  routeNumber = 0,
+  totalRoutes = 0,
+  scannedHouseholds = 0,
+  totalHouseholds = 0,
+  apiSuccess = 0,
+  apiRetries = 0,
+  apiFailed = 0,
+  validPdf = 0,
+  duplicateSkipped = 0,
+  phase = "準備中"
+} = {}) {
+  ensureProgressUi();
+  setText("ycut-db-route", `目前路段：${routeNumber} / ${totalRoutes}`);
+  setText("ycut-db-households", `掃描戶別：${scannedHouseholds} / ${totalHouseholds}`);
+  setText("ycut-db-success", `API成功：${apiSuccess}`);
+  setText("ycut-db-retries", `API重試：${apiRetries}`);
+  setText("ycut-db-failed", `API失敗：${apiFailed}`);
+  setText("ycut-db-pdf", `有效PDF：${validPdf}`);
+  setText("ycut-db-duplicates", `重複略過：${duplicateSkipped}`);
+  setText("ycut-progress-stage", `狀態：${phase}`);
+
+  const percent = totalHouseholds ? Math.round((scannedHouseholds / totalHouseholds) * 100) : 0;
+  setText("ycut-progress-count", `${scannedHouseholds}/${totalHouseholds} · ${percent}%`);
+  setText("ycut-progress-eta", scannedHouseholds >= totalHouseholds && totalHouseholds > 0 ? "完成" : "處理中");
+  const bar = document.getElementById("ycut-progress-bar");
+  if (bar) {
+    bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    bar.classList.toggle("is-complete", scannedHouseholds >= totalHouseholds && totalHouseholds > 0);
+  }
 }
 
 function formatEta(ms) {
@@ -113,7 +181,8 @@ export function clearExtractionStates() {
 
 export function mountPanel({
   onScan, onHighlight, onAutoFollow,
-  onDoorplateToggle, onDoorplateAll, onDoorplateNone, onExport
+  onDoorplateToggle, onDoorplateAll, onDoorplateNone, onExport,
+  onBuildDatabase, onCancelDatabase, onExportFailures
 }) {
   if (document.getElementById("ycut-blue-user-panel")) return;
 
@@ -145,6 +214,13 @@ export function mountPanel({
       <button id="ycut-export-json">擷取PDF→JSON下載</button>
     </div>
     <div class="row">
+      <button id="ycut-build-database">建立PDF資料庫</button>
+    </div>
+    <div class="row">
+      <button id="ycut-cancel-database" disabled>取消資料庫掃描</button>
+      <button id="ycut-export-failures" disabled>匯出失敗清單</button>
+    </div>
+    <div class="row">
       <button id="ycut-close">關閉面板</button>
     </div>
     <div id="ycut-progress" class="muted">待命</div>
@@ -163,6 +239,9 @@ export function mountPanel({
     onAutoFollow?.(STATE.autoFollow);
   });
   panel.querySelector("#ycut-export-json").addEventListener("click", onExport);
+  panel.querySelector("#ycut-build-database").addEventListener("click", onBuildDatabase);
+  panel.querySelector("#ycut-cancel-database").addEventListener("click", onCancelDatabase);
+  panel.querySelector("#ycut-export-failures").addEventListener("click", onExportFailures);
   panel.querySelector("#ycut-close").addEventListener("click", () => panel.remove());
 
   panel.querySelector("#ycut-doorplate-toggle").addEventListener("click", () => {

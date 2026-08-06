@@ -1,3 +1,9 @@
+import {
+  DISCLAIMER_STORAGE_KEY,
+  DISCLAIMER_VERSION,
+  getDisclaimerAccepted
+} from './src/disclaimer.js';
+
 const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
 const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const PRODUCT_ID = 'ycut_extractor';
@@ -12,6 +18,8 @@ let qrExpireAt = 0;
 let qrTimerId = null;
 let pollTimerId = null;
 let lastLicenseCheck = null;
+let licenseAuthorized = false;
+let disclaimerAccepted = false;
 
 function setStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -21,19 +29,70 @@ function setStatus(message, ok = false) {
 }
 
 function setToolEnabled(enabled) {
-  $('scan').disabled = !enabled;
-  $('toggle').disabled = !enabled;
+  const canUseMainTools = enabled && licenseAuthorized && disclaimerAccepted;
+  $('scan').disabled = !canUseMainTools;
+  $('toggle').disabled = !canUseMainTools;
+}
+
+function stopAuthorizationUi() {
+  if (pollTimerId) clearInterval(pollTimerId);
+  if (qrTimerId) clearInterval(qrTimerId);
+  pollTimerId = null;
+  qrTimerId = null;
+
+  const qrBox = document.querySelector('.qr-box');
+  if (qrBox) qrBox.style.display = 'none';
+  $('qrTimer').style.display = 'none';
+  $('refreshQrBtn').style.display = 'none';
+}
+
+function showPostAuthorizationStatus(message) {
+  stopAuthorizationUi();
+  showLicensePanel();
+  setStatus(message, true);
+}
+
+async function openDisclaimerPage() {
+  const disclaimerUrl = chrome.runtime.getURL('disclaimer.html');
+  const existingTabs = await chrome.tabs.query({});
+  const existingTab = existingTabs.find((tab) =>
+    Number.isInteger(tab.id) && tab.url === disclaimerUrl
+  );
+
+  if (existingTab) {
+    await chrome.tabs.update(existingTab.id, { active: true });
+    if (Number.isInteger(existingTab.windowId)) {
+      await chrome.windows.update(existingTab.windowId, { focused: true });
+    }
+  } else {
+    await chrome.tabs.create({ url: disclaimerUrl, active: true });
+  }
+
+  window.close();
+}
+
+async function applyAuthorizedPopupState() {
+  licenseAuthorized = true;
+  disclaimerAccepted = await getDisclaimerAccepted();
+  setToolEnabled(true);
+
+  if (!disclaimerAccepted) {
+    stopAuthorizationUi();
+    try {
+      await openDisclaimerPage();
+    } catch {
+      showPostAuthorizationStatus('授權已完成，但無法開啟首次使用同意頁面。請重新開啟擴充功能後再試。');
+    }
+    return;
+  }
+
+  showPostAuthorizationStatus('授權與首次使用同意皆已完成。');
 }
 
 function showLicensePanel(message) {
   const panel = $('licensePanel');
   if (panel) panel.style.display = 'block';
   if (message) setStatus(message, false);
-}
-
-function hideLicensePanel() {
-  const panel = $('licensePanel');
-  if (panel) panel.style.display = 'none';
 }
 
 async function getOrCreateInstallId() {
@@ -243,9 +302,7 @@ function startPollingApproval() {
       if (ok) {
         clearInterval(pollTimerId);
         pollTimerId = null;
-        setToolEnabled(true);
-        setStatus('授權成功，可以使用工具。', true);
-        setTimeout(hideLicensePanel, 1200);
+        await applyAuthorizedPopupState();
       }
     } catch (e) {
       // Keep polling; transient network errors should not interrupt the QR flow.
@@ -258,25 +315,19 @@ async function loadLicenseState() {
   const installId = await getOrCreateInstallId();
 
   if (await hasFreshLicenseCache(installId)) {
-    setToolEnabled(true);
-    setStatus('授權快取有效。', true);
-    hideLicensePanel();
+    await applyAuthorizedPopupState();
     return;
   }
 
   try {
     const ok = await checkQrLicenseStatus();
     if (ok) {
-      setToolEnabled(true);
-      setStatus('授權有效。', true);
-      hideLicensePanel();
+      await applyAuthorizedPopupState();
       return;
     }
   } catch (e) {
     if (await hasFreshLicenseCache(installId)) {
-      setToolEnabled(true);
-      setStatus('授權有效。', true);
-      hideLicensePanel();
+      await applyAuthorizedPopupState();
       return;
     }
   }
@@ -306,11 +357,22 @@ $('refreshQrBtn').addEventListener('click', async () => {
 });
 
 $('scan').addEventListener('click', () => {
+  if (!licenseAuthorized || !disclaimerAccepted) return;
   withActiveTab((tabId) => send(tabId, { type: 'YCUT_SCAN' }));
 });
 
 $('toggle').addEventListener('click', () => {
+  if (!licenseAuthorized || !disclaimerAccepted) return;
   withActiveTab((tabId) => send(tabId, { type: 'YCUT_TOGGLE_HIGHLIGHT' }));
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !licenseAuthorized) return;
+  const record = changes[DISCLAIMER_STORAGE_KEY]?.newValue;
+  if (record?.accepted !== true || record?.version !== DISCLAIMER_VERSION) return;
+  disclaimerAccepted = true;
+  setToolEnabled(true);
+  showPostAuthorizationStatus('授權與首次使用同意皆已完成。');
 });
 
 document.addEventListener('DOMContentLoaded', async () => {

@@ -7,7 +7,9 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // 收到 content script 的要求，就在「頁面世界 (MAIN)」覆寫 alert / confirm / prompt
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.type !== 'YCUT_AUTOCONFIRM') return;
+  if (!msg) return;
+
+  if (msg.type !== 'YCUT_AUTOCONFIRM') return;
 
   const tabId = sender.tab && sender.tab.id;
   if (!tabId) return;

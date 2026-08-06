@@ -1,31 +1,20 @@
 import { CONFIG, sleep, log } from "./config.js";
-import { STATE } from "./state.js";
+import { STATE, anyExtractorRunning, legacyExtractorState } from "./state.js";
 import { waitForPageIdle } from "./utils.js";
-import { getAreaFromAnchor, getAreaFilterFromPanel } from "./scanner.js";
+import { getAreaFromAnchor, getAreaFilterFromPanel, scan } from "./scanner.js";
 import { visibleModal, clickFirstOwnerAndWaitModal, closeCurrentModalIfAny, closeAfterExtraction } from "./interactions.js";
-import { isValidPdfHref, waitForValidPdfHref, extractPdfHrefFromModal, getPdfByApi } from "./pdf.js";
+import { isValidPdfHref, waitForValidPdfHref, extractPdfHrefFromModal, getPdfByApi, parseOwnerParams } from "./pdf.js";
+import { scanAllRoutePages } from "./route-scanner.js";
+import { exportPdfResults, getCommunityName, normalizePdfUrls } from "./export.js";
 import {
   clearExtractionStates,
   markAnchorExtractionState,
   resetPanelProgress,
   setPanelStatus,
   setPanelWorking,
-  updatePanelProgress
+  updatePanelProgress,
+  updateRouteProgress
 } from "./panel.js";
-
-function downloadJson(data, filename = `ycut_pdf_${Date.now()}.json`) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    URL.revokeObjectURL(url);
-    a.remove();
-  }, 0);
-}
 
 function followAnchor(anchor) {
   if (!STATE.autoFollow || document.hidden) return;
@@ -84,25 +73,41 @@ function buildCandidates() {
   });
 }
 
-export async function exportPdfLinksAsJson({
+function getHouseholdKey(anchor, routeValue) {
+  const params = parseOwnerParams(anchor);
+  if (params?.etrIdx) return `etr:${params.etrIdx}`;
+  if (params?.etrNo) return `etrno:${params.etrNo}`;
+  const ownerCall = anchor?.closest?.("td")
+    ?.querySelector?.("[onclick*='checkAndShowCommunityOwnerAddr']")
+    ?.getAttribute?.("onclick");
+  if (ownerCall) return `owner-call:${ownerCall}`;
+  return `fallback:${routeValue}:${describeAnchor(anchor)}`;
+}
+
+export async function scanCurrentRoute({
   delayBetween = CONFIG.DELAY_BETWEEN_MS,
   collapseAfter = true,
   perItemTimeout = CONFIG.PER_ITEM_TIMEOUT_MS,
-  retries = CONFIG.MAX_RETRIES_PER_ITEM
+  retries = CONFIG.MAX_RETRIES_PER_ITEM,
+  routeValue = "",
+  seenHouseholds = new Set(),
+  onItemComplete = null
 } = {}) {
-  if (STATE.acting) return;
-
-  const candidates = buildCandidates();
-  if (!candidates.length) {
-    setPanelStatus("篩選後沒有符合建坪的戶別");
-    alert("篩選後沒有符合建坪的戶別，請調整條件後再試。");
-    return;
+  const filteredCandidates = buildCandidates();
+  const candidates = [];
+  let duplicateHouseholds = 0;
+  for (const anchor of filteredCandidates) {
+    const householdKey = getHouseholdKey(anchor, routeValue);
+    if (seenHouseholds.has(householdKey)) {
+      duplicateHouseholds++;
+      continue;
+    }
+    seenHouseholds.add(householdKey);
+    candidates.push(anchor);
   }
 
-  STATE.acting = true;
   const total = candidates.length;
   clearExtractionStates();
-  setPanelWorking(true, `擷取 PDF 中（篩選後 ${total} 戶）`);
   resetPanelProgress(total, {
     title: "擷取 PDF 中",
     stage: "準備開始"
@@ -198,17 +203,153 @@ export async function exportPdfLinksAsJson({
       current,
       stage: got && isValidPdfHref(got) ? "此戶完成" : "此戶失敗"
     });
+    onItemComplete?.({ found: urls.length, failed: failed.length, done: idx + 1, total });
     await sleep(delayBetween);
   }
 
-  const uniq = Array.from(new Set(urls));
-  downloadJson(uniq, `ycut_pdf_${Date.now()}.json`);
-  if (failed.length) log("PDF 擷取失敗清單", failed);
+  return {
+    urls,
+    failed,
+    candidateCount: filteredCandidates.length,
+    scannedCount: candidates.length,
+    duplicateHouseholds
+  };
+}
 
-  setPanelWorking(false, `已擷取 ${urls.length}/${total}，不重複 ${uniq.length}，失敗 ${failed.length}`);
-  updatePanelProgress(total, total, {
-    title: "擷取完成",
-    current: failed.length ? `失敗 ${failed.length} 戶，請查看 console` : "全部完成",
-    stage: `成功 ${urls.length}，不重複 ${uniq.length}，失敗 ${failed.length}`
-  });
+export async function scanAllRoutes(options = {}) {
+  if (anyExtractorRunning()) return;
+
+  const exportButton = document.getElementById("ycut-export-json");
+  const databaseButton = document.getElementById("ycut-build-database");
+  const originalButtonDisabled = exportButton?.disabled || false;
+  const originalDatabaseButtonDisabled = databaseButton?.disabled || false;
+  const allUrls = [];
+  const allItemFailures = [];
+  const routeFailures = [];
+  const seenHouseholds = new Set();
+  let successfulRoutes = 0;
+  let routeCount = 0;
+  let totalCandidates = 0;
+  let completionText = "掃描未完成";
+
+  legacyExtractorState.running = true;
+  STATE.acting = true;
+  if (exportButton) {
+    exportButton.disabled = true;
+    exportButton.setAttribute("aria-busy", "true");
+  }
+  if (databaseButton) databaseButton.disabled = true;
+  setPanelWorking(true, "準備掃描所有路段分頁");
+  updateRouteProgress();
+
+  try {
+    const routeResult = await scanAllRoutePages({
+      routeTimeout: options.routeTimeout,
+      onRouteStart: ({ route, routeNumber, totalRoutes }) => {
+        routeCount = totalRoutes;
+        updateRouteProgress({
+          routeName: route.label,
+          index: routeNumber,
+          total: totalRoutes,
+          found: allUrls.length,
+          failed: routeFailures.length
+        });
+        setPanelStatus(`正在掃描路段：${route.label}`);
+      },
+      onRoute: async ({ route, routeNumber, totalRoutes }) => {
+        scan();
+        const result = await scanCurrentRoute({
+          ...options,
+          routeValue: route.value,
+          seenHouseholds,
+          onItemComplete: ({ found }) => updateRouteProgress({
+            routeName: route.label,
+            index: routeNumber,
+            total: totalRoutes,
+            found: allUrls.length + found,
+            failed: routeFailures.length
+          })
+        });
+        totalCandidates += result.candidateCount;
+        allUrls.push(...result.urls);
+        allItemFailures.push(...result.failed.map((item) => ({ ...item, route: route.label })));
+        return result;
+      },
+      onRouteComplete: ({ route, routeNumber, totalRoutes }) => {
+        successfulRoutes++;
+        updateRouteProgress({
+          routeName: route.label,
+          index: routeNumber,
+          total: totalRoutes,
+          found: allUrls.length,
+          failed: routeFailures.length
+        });
+      },
+      onRouteError: ({ failure }) => {
+        routeFailures.push(failure);
+        log("路段掃描失敗，繼續下一頁", failure);
+      },
+      onBeforeRestore: () => closeCurrentModalIfAny(),
+      onRestored: () => scan()
+    });
+    routeCount = routeResult.routeCount;
+
+    const uniqueUrls = normalizePdfUrls(allUrls);
+    if (totalCandidates === 0) {
+      completionText = "篩選後沒有符合建坪的戶別";
+      alert("篩選後沒有符合建坪的戶別，請調整條件後再試。");
+    } else {
+      const finalFailures = [
+        ...routeFailures.map((failure) => ({
+          stage: "route",
+          route: failure.route,
+          routeValue: failure.value,
+          attempts: 0,
+          reason: failure.reason
+        })),
+        ...allItemFailures.map((failure) => ({
+          stage: "PDF extraction",
+          route: failure.route,
+          door: failure.text,
+          attempts: options.retries == null ? CONFIG.MAX_RETRIES_PER_ITEM + 1 : options.retries + 1,
+          reason: failure.reason
+        }))
+      ];
+      exportPdfResults(uniqueUrls, finalFailures, getCommunityName());
+      completionText = [
+        `掃描分頁：${routeCount}`,
+        `成功分頁：${successfulRoutes}`,
+        `失敗分頁：${routeFailures.length}`,
+        `找到 PDF：${allUrls.length}`,
+        `去重後 PDF：${uniqueUrls.length}`
+      ].join("\n");
+    }
+
+    if (allItemFailures.length) log("PDF 擷取失敗清單", allItemFailures);
+    if (routeFailures.length) log("路段失敗清單", routeFailures);
+    updatePanelProgress(routeCount, routeCount, {
+      title: "擷取完成",
+      current: routeFailures.length ? `失敗 ${routeFailures.length} 個分頁` : "全部分頁完成",
+      stage: `PDF ${allUrls.length}，去重後 ${uniqueUrls.length}，戶別失敗 ${allItemFailures.length}`
+    });
+    updateRouteProgress({
+      routeName: "全部完成",
+      index: routeCount,
+      total: routeCount,
+      found: allUrls.length,
+      failed: routeFailures.length
+    });
+  } catch (error) {
+    completionText = `掃描中止：${error?.message || "未知錯誤"}`;
+    log("全部路段掃描失敗", error);
+  } finally {
+    setPanelWorking(false, completionText);
+    STATE.acting = false;
+    legacyExtractorState.running = false;
+    if (exportButton) {
+      exportButton.disabled = originalButtonDisabled;
+      exportButton.removeAttribute("aria-busy");
+    }
+    if (databaseButton) databaseButton.disabled = originalDatabaseButtonDisabled;
+  }
 }

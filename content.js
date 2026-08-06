@@ -1,4 +1,3 @@
-chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
 (() => {
   // src/state.js
   var STATE = {
@@ -12,6 +11,19 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     selectedColIdx: /* @__PURE__ */ new Set(),
     colIdxToDoorplate: /* @__PURE__ */ new Map()
   };
+  var legacyExtractorState = {
+    running: false
+  };
+  var databaseExtractorState = {
+    running: false,
+    cancelRequested: false,
+    abortController: null,
+    lastFailures: [],
+    lastCommunityName: "community"
+  };
+  function anyExtractorRunning() {
+    return legacyExtractorState.running || databaseExtractorState.running;
+  }
 
   // src/config.js
   var SEL = {
@@ -22,7 +34,12 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
   var CONFIG = {
     DELAY_BETWEEN_MS: 2e3,
     PER_ITEM_TIMEOUT_MS: 3e4,
-    MAX_RETRIES_PER_ITEM: 2
+    MAX_RETRIES_PER_ITEM: 2,
+    ROUTE_REFRESH_TIMEOUT_MS: 3e4,
+    ROUTE_SETTLE_MS: 350,
+    OWNER_API_TIMEOUT_MS: 15e3,
+    OWNER_API_RETRY_DELAYS_MS: [800, 1500],
+    DATABASE_API_GAP_MS: 100
   };
   var LICENSE_STATUS_API = "https://ycut-license-api.sir8713642.workers.dev/api/license-status";
   var PRODUCT_ID = "ycut_extractor";
@@ -218,6 +235,25 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     box = document.createElement("div");
     box.id = "ycut-progress-box";
     box.innerHTML = `
+    <div id="ycut-legacy-progress">
+      <div id="ycut-route-current">\u6B63\u5728\u6383\u63CF\u8DEF\u6BB5\uFF1A-</div>
+      <div class="ycut-route-meta">
+        <span id="ycut-route-count">\u5206\u9801\u9032\u5EA6\uFF1A0 / 0</span>
+        <span id="ycut-route-found">\u76EE\u524D\u627E\u5230\uFF1A0</span>
+        <span id="ycut-route-failed">\u76EE\u524D\u5931\u6557\uFF1A0</span>
+      </div>
+    </div>
+    <div id="ycut-database-progress" hidden>
+      <div id="ycut-db-route">\u76EE\u524D\u8DEF\u6BB5\uFF1A0 / 0</div>
+      <div class="ycut-database-meta">
+        <span id="ycut-db-households">\u6383\u63CF\u6236\u5225\uFF1A0 / 0</span>
+        <span id="ycut-db-success">API\u6210\u529F\uFF1A0</span>
+        <span id="ycut-db-retries">API\u91CD\u8A66\uFF1A0</span>
+        <span id="ycut-db-failed">API\u5931\u6557\uFF1A0</span>
+        <span id="ycut-db-pdf">\u6709\u6548PDF\uFF1A0</span>
+        <span id="ycut-db-duplicates">\u91CD\u8907\u7565\u904E\uFF1A0</span>
+      </div>
+    </div>
     <div class="ycut-progress-meta">
       <span id="ycut-progress-count">0/0</span>
       <span id="ycut-progress-eta">\u4F30\u7B97\u4E2D</span>
@@ -238,6 +274,51 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
   function setText(id, text) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
+  }
+  function updateRouteProgress({ routeName = "-", index = 0, total = 0, found = 0, failed = 0 } = {}) {
+    ensureProgressUi();
+    setText("ycut-route-current", `\u6B63\u5728\u6383\u63CF\u8DEF\u6BB5\uFF1A${routeName}`);
+    setText("ycut-route-count", `\u5206\u9801\u9032\u5EA6\uFF1A${index} / ${total}`);
+    setText("ycut-route-found", `\u76EE\u524D\u627E\u5230\uFF1A${found}`);
+    setText("ycut-route-failed", `\u76EE\u524D\u5931\u6557\uFF1A${failed}`);
+  }
+  function setProgressMode(mode) {
+    ensureProgressUi();
+    const database = mode === "database";
+    const legacyBox = document.getElementById("ycut-legacy-progress");
+    const databaseBox = document.getElementById("ycut-database-progress");
+    if (legacyBox) legacyBox.hidden = database;
+    if (databaseBox) databaseBox.hidden = !database;
+  }
+  function updateDatabaseProgress({
+    routeNumber = 0,
+    totalRoutes = 0,
+    scannedHouseholds = 0,
+    totalHouseholds = 0,
+    apiSuccess = 0,
+    apiRetries = 0,
+    apiFailed = 0,
+    validPdf = 0,
+    duplicateSkipped = 0,
+    phase = "\u6E96\u5099\u4E2D"
+  } = {}) {
+    ensureProgressUi();
+    setText("ycut-db-route", `\u76EE\u524D\u8DEF\u6BB5\uFF1A${routeNumber} / ${totalRoutes}`);
+    setText("ycut-db-households", `\u6383\u63CF\u6236\u5225\uFF1A${scannedHouseholds} / ${totalHouseholds}`);
+    setText("ycut-db-success", `API\u6210\u529F\uFF1A${apiSuccess}`);
+    setText("ycut-db-retries", `API\u91CD\u8A66\uFF1A${apiRetries}`);
+    setText("ycut-db-failed", `API\u5931\u6557\uFF1A${apiFailed}`);
+    setText("ycut-db-pdf", `\u6709\u6548PDF\uFF1A${validPdf}`);
+    setText("ycut-db-duplicates", `\u91CD\u8907\u7565\u904E\uFF1A${duplicateSkipped}`);
+    setText("ycut-progress-stage", `\u72C0\u614B\uFF1A${phase}`);
+    const percent = totalHouseholds ? Math.round(scannedHouseholds / totalHouseholds * 100) : 0;
+    setText("ycut-progress-count", `${scannedHouseholds}/${totalHouseholds} \xB7 ${percent}%`);
+    setText("ycut-progress-eta", scannedHouseholds >= totalHouseholds && totalHouseholds > 0 ? "\u5B8C\u6210" : "\u8655\u7406\u4E2D");
+    const bar = document.getElementById("ycut-progress-bar");
+    if (bar) {
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      bar.classList.toggle("is-complete", scannedHouseholds >= totalHouseholds && totalHouseholds > 0);
+    }
   }
   function formatEta(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return "\u4F30\u7B97\u4E2D";
@@ -297,7 +378,10 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     onDoorplateToggle,
     onDoorplateAll,
     onDoorplateNone,
-    onExport
+    onExport,
+    onBuildDatabase,
+    onCancelDatabase,
+    onExportFailures
   }) {
     if (document.getElementById("ycut-blue-user-panel")) return;
     const panel = document.createElement("div");
@@ -328,6 +412,13 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       <button id="ycut-export-json">\u64F7\u53D6PDF\u2192JSON\u4E0B\u8F09</button>
     </div>
     <div class="row">
+      <button id="ycut-build-database">\u5EFA\u7ACBPDF\u8CC7\u6599\u5EAB</button>
+    </div>
+    <div class="row">
+      <button id="ycut-cancel-database" disabled>\u53D6\u6D88\u8CC7\u6599\u5EAB\u6383\u63CF</button>
+      <button id="ycut-export-failures" disabled>\u532F\u51FA\u5931\u6557\u6E05\u55AE</button>
+    </div>
+    <div class="row">
       <button id="ycut-close">\u95DC\u9589\u9762\u677F</button>
     </div>
     <div id="ycut-progress" class="muted">\u5F85\u547D</div>
@@ -343,6 +434,9 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       onAutoFollow?.(STATE.autoFollow);
     });
     panel.querySelector("#ycut-export-json").addEventListener("click", onExport);
+    panel.querySelector("#ycut-build-database").addEventListener("click", onBuildDatabase);
+    panel.querySelector("#ycut-cancel-database").addEventListener("click", onCancelDatabase);
+    panel.querySelector("#ycut-export-failures").addEventListener("click", onExportFailures);
     panel.querySelector("#ycut-close").addEventListener("click", () => panel.remove());
     panel.querySelector("#ycut-doorplate-toggle").addEventListener("click", () => {
       STATE.doorplateSelectEnabled = !STATE.doorplateSelectEnabled;
@@ -615,20 +709,307 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     return { url: pdf, detail, params };
   }
 
-  // src/extractor.js
-  function downloadJson(data, filename = `ycut_pdf_${Date.now()}.json`) {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  // src/route-scanner.js
+  var ROUTE_SELECT_SELECTOR = "select#selBARoad";
+  var TABLE_SELECTOR = "table#BuAddr";
+  var TABLE_CONTAINER_SELECTOR = "#CommunityCase";
+  function abortError() {
+    return new DOMException("\u6383\u63CF\u5DF2\u53D6\u6D88", "AbortError");
+  }
+  function throwIfAborted(signal) {
+    if (signal?.aborted) throw abortError();
+  }
+  function getRouteSelect() {
+    return document.querySelector(ROUTE_SELECT_SELECTOR);
+  }
+  function isPlaceholderOption(option) {
+    const value = String(option?.value || "").trim();
+    const text = String(option?.textContent || "").replace(/\s+/g, " ").trim();
+    if (!value || !text) return true;
+    if (option.disabled || option.hidden || option.dataset?.placeholder === "true") return true;
+    return /^(請選擇|請選|選擇)?\s*(路段|分頁)\s*$/.test(text);
+  }
+  function getValidRouteOptions(select = getRouteSelect()) {
+    if (!select) return [];
+    const seenValues = /* @__PURE__ */ new Set();
+    return Array.from(select.options).filter((option) => !isPlaceholderOption(option)).map((option) => ({
+      value: String(option.value),
+      label: String(option.textContent || "").replace(/\s+/g, " ").trim()
+    })).filter((option) => {
+      if (seenValues.has(option.value)) return false;
+      seenValues.add(option.value);
+      return true;
+    });
+  }
+  function getTableSignature() {
+    const container = document.querySelector(TABLE_CONTAINER_SELECTOR);
+    const table = document.querySelector(TABLE_SELECTOR);
+    if (!container || !table) return "";
+    const headers = Array.from(table.querySelectorAll("th")).map((cell) => (cell.childNodes[0]?.textContent || cell.textContent || "").replace(/\s+/g, " ").trim()).join("|");
+    const households = Array.from(container.querySelectorAll("td")).map((cell) => {
+      const owners = Array.from(cell.querySelectorAll("[onclick*='checkAndShowCommunityOwnerAddr']")).map((link) => link.getAttribute("onclick") || "").join(",");
+      const area = cell.querySelector(".ETRPin")?.textContent?.trim() || "";
+      return `${cell.className}:${area}:${owners}`;
+    }).join("|");
+    return `${headers}::${households}`;
+  }
+  function mutationTouchesTable(mutation) {
+    const currentContainer = document.querySelector(TABLE_CONTAINER_SELECTOR);
+    if (currentContainer && (mutation.target === currentContainer || currentContainer.contains(mutation.target))) return true;
+    return Array.from(mutation.addedNodes).concat(Array.from(mutation.removedNodes)).some((node) => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return false;
+      return node.matches?.(TABLE_CONTAINER_SELECTOR) || node.querySelector?.(TABLE_CONTAINER_SELECTOR);
+    });
+  }
+  function waitForTableRefresh({
+    targetValue,
+    previousTable,
+    previousSignature,
+    timeout = CONFIG.ROUTE_REFRESH_TIMEOUT_MS,
+    signal
+  }) {
+    return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      const observedRoot = document.querySelector(TABLE_CONTAINER_SELECTOR)?.parentElement || document.body;
+      let sawRelevantMutation = false;
+      let stableSignature = "";
+      let stableSince = 0;
+      let settled = false;
+      let observer;
+      let pollTimer;
+      let timeoutTimer;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        observer?.disconnect();
+        clearInterval(pollTimer);
+        clearTimeout(timeoutTimer);
+        signal?.removeEventListener("abort", onAbort);
+        if (error) reject(error);
+        else resolve(true);
+      };
+      const onAbort = () => finish(abortError());
+      const check = () => {
+        const select = getRouteSelect();
+        const table = document.querySelector(TABLE_SELECTOR);
+        const signature = getTableSignature();
+        const routeIsSelected = !!select && select.value === targetValue;
+        const domWasRefreshed = sawRelevantMutation || table !== previousTable || signature !== previousSignature;
+        if (!routeIsSelected || !table || !signature || !domWasRefreshed || pageIsBusy()) {
+          stableSignature = "";
+          stableSince = 0;
+          return;
+        }
+        if (signature !== stableSignature) {
+          stableSignature = signature;
+          stableSince = Date.now();
+          return;
+        }
+        if (Date.now() - stableSince >= CONFIG.ROUTE_SETTLE_MS) finish();
+      };
+      try {
+        throwIfAborted(signal);
+        observer = new MutationObserver((mutations) => {
+          if (mutations.some(mutationTouchesTable)) sawRelevantMutation = true;
+          check();
+        });
+        observer.observe(observedRoot, { childList: true, subtree: true, characterData: true });
+        pollTimer = setInterval(check, 120);
+        timeoutTimer = setTimeout(() => {
+          finish(new Error(`\u7B49\u5F85\u8DEF\u6BB5\u8868\u683C\u66F4\u65B0\u903E\u6642\uFF08${Math.round((Date.now() - startedAt) / 1e3)} \u79D2\uFF09`));
+        }, timeout);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        check();
+      } catch (error) {
+        finish(error);
+      }
+    });
+  }
+  async function switchRouteAndWait(route, timeout = CONFIG.ROUTE_REFRESH_TIMEOUT_MS, signal, { forceRefresh = false } = {}) {
+    throwIfAborted(signal);
+    const select = getRouteSelect();
+    if (!select) throw new Error(`\u627E\u4E0D\u5230\u8DEF\u6BB5\u9078\u55AE\uFF1A${ROUTE_SELECT_SELECTOR}`);
+    if (!Array.from(select.options).some((option) => option.value === route.value && !option.disabled)) {
+      throw new Error(`\u8DEF\u6BB5\u9078\u9805\u5DF2\u4E0D\u5B58\u5728\uFF1A${route.label}`);
+    }
+    if (select.value === route.value && !forceRefresh) return true;
+    const previousTable = document.querySelector(TABLE_SELECTOR);
+    const previousSignature = getTableSignature();
+    select.value = route.value;
+    if (select.value !== route.value) throw new Error(`\u7121\u6CD5\u5207\u63DB\u5230\u8DEF\u6BB5\uFF1A${route.label}`);
+    const refreshPromise = waitForTableRefresh({ targetValue: route.value, previousTable, previousSignature, timeout, signal });
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await refreshPromise;
+    throwIfAborted(signal);
+    const currentSelect = getRouteSelect();
+    if (!currentSelect || currentSelect.value !== route.value) throw new Error(`\u8DEF\u6BB5\u5207\u63DB\u5F8C value \u4E0D\u7B26\uFF1A${route.label}`);
+    return true;
+  }
+  async function restoreOriginalRoute(originalValue, timeout = CONFIG.ROUTE_REFRESH_TIMEOUT_MS) {
+    if (originalValue == null) return;
+    const select = getRouteSelect();
+    if (!select || !Array.from(select.options).some((option2) => option2.value === originalValue)) return;
+    const option = Array.from(select.options).find((item) => item.value === originalValue);
+    await switchRouteAndWait({ value: originalValue, label: option?.textContent?.trim() || originalValue }, timeout);
+    await sleep(0);
+  }
+  async function scanAllRoutePages({
+    onRoute,
+    onRouteStart,
+    onRouteComplete,
+    onRouteError,
+    onBeforeRestore,
+    onRestored,
+    onRestoreError,
+    loadRoute,
+    routeTimeout = CONFIG.ROUTE_REFRESH_TIMEOUT_MS,
+    signal
+  } = {}) {
+    const initialSelect = getRouteSelect();
+    const originalValue = initialSelect?.value ?? null;
+    const routes = getValidRouteOptions(initialSelect);
+    const effectiveRoutes = routes.length ? routes : [{ value: originalValue || "", label: "\u76EE\u524D\u756B\u9762", currentOnly: true }];
+    const results = [];
+    const failures = [];
+    try {
+      for (let index = 0; index < effectiveRoutes.length; index++) {
+        throwIfAborted(signal);
+        const route = effectiveRoutes[index];
+        const context = { route, index, routeNumber: index + 1, totalRoutes: effectiveRoutes.length };
+        onRouteStart?.(context);
+        try {
+          if (!route.currentOnly) {
+            if (loadRoute) await loadRoute({ ...context, routeTimeout, signal });
+            else await switchRouteAndWait(route, routeTimeout, signal);
+          }
+          throwIfAborted(signal);
+          const value = await onRoute?.(context);
+          results.push({ ...context, value });
+          onRouteComplete?.({ ...context, value });
+        } catch (error) {
+          if (error?.name === "AbortError" || signal?.aborted) throw error;
+          const failure = { route: route.label, value: route.value, reason: error?.message || "\u8DEF\u6BB5\u6383\u63CF\u5931\u6557" };
+          failures.push(failure);
+          onRouteError?.({ ...context, error, failure });
+        }
+      }
+      return {
+        routes: effectiveRoutes,
+        routeCount: effectiveRoutes.length,
+        successfulRoutes: results.length,
+        results,
+        failures,
+        originalValue
+      };
+    } finally {
+      try {
+        await onBeforeRestore?.();
+      } catch (error) {
+        log("\u8DEF\u6BB5\u6062\u5FA9\u524D\u6E05\u7406\u5931\u6557", error);
+        onRestoreError?.(error);
+      }
+      try {
+        if (initialSelect && originalValue != null) await restoreOriginalRoute(originalValue, routeTimeout);
+      } catch (error) {
+        log("\u6062\u5FA9\u539F\u59CB\u8DEF\u6BB5\u5931\u6557", error);
+        onRestoreError?.(error);
+      }
+      try {
+        await onRestored?.();
+      } catch (error) {
+        log("\u8DEF\u6BB5\u6062\u5FA9\u5F8C\u91CD\u65B0\u6383\u63CF\u5931\u6557", error);
+        onRestoreError?.(error);
+      }
+    }
+  }
+
+  // src/export.js
+  function downloadBlob(content, mimeType, filename) {
+    const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
     setTimeout(() => {
       URL.revokeObjectURL(url);
-      a.remove();
+      anchor.remove();
     }, 0);
   }
+  function downloadJson(data, filename = `ycut_${Date.now()}.json`) {
+    downloadBlob(JSON.stringify(data, null, 2), "application/json;charset=utf-8", filename);
+  }
+  function normalizePdfUrls(pdfUrls) {
+    const seen = /* @__PURE__ */ new Set();
+    const normalized = [];
+    for (const value of pdfUrls || []) {
+      const url = typeof value === "string" ? value.trim() : "";
+      if (!url || !isValidPdfHref(url) || seen.has(url)) continue;
+      seen.add(url);
+      normalized.push(url);
+    }
+    return normalized;
+  }
+  function safeName(value) {
+    return String(value || "community").replace(/[\\/:*?"<>|\r\n]/g, "_").replace(/\s+/g, "_").slice(0, 80) || "community";
+  }
+  function getCommunityName() {
+    const breadcrumb = document.querySelector('.breadcrumb, [class*="breadcrumb"], [class*="crumb"]');
+    if (breadcrumb) {
+      const parts = (breadcrumb.innerText || breadcrumb.textContent || "").split(/[\/\n>]/).map((part) => part.trim()).filter(Boolean);
+      if (parts.length) return parts[parts.length - 1];
+    }
+    return (document.title || "community").replace(/[^\p{L}\p{N}_-]/gu, "") || "community";
+  }
+  function createPdfExportBaseFilename(communityName = "community") {
+    const now = /* @__PURE__ */ new Date();
+    const pad = (value) => String(value).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    return `ycut_pdf_database_${safeName(communityName)}_${stamp}`;
+  }
+  function exportPdfUrlJson(pdfUrls, filename) {
+    const normalized = normalizePdfUrls(pdfUrls);
+    downloadJson(normalized, filename.endsWith(".json") ? filename : `${filename}.json`);
+    return normalized;
+  }
+  function csvCell(value) {
+    return `"${String(value == null ? "" : value).replace(/"/g, '""')}"`;
+  }
+  function buildFailuresCsv(failures) {
+    const headers = ["\u8DEF\u6BB5", "\u9580\u724C", "Etr_idx", "Owner_idx", "\u91CD\u8A66\u6B21\u6578", "\u5931\u6557\u539F\u56E0"];
+    const rows = failures.map((failure) => [
+      failure.route,
+      failure.door ?? failure.doorplate ?? failure.household ?? failure.text,
+      failure.etr_idx ?? failure.etrIdx,
+      failure.owner_idx ?? failure.ownerIdx,
+      failure.attempts,
+      failure.reason
+    ]);
+    return `\uFEFF${headers.map(csvCell).join(",")}\r
+${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
+  }
+  function exportFailuresCsv(failures, filename) {
+    if (!Array.isArray(failures) || failures.length === 0) return false;
+    const csv = buildFailuresCsv(failures);
+    downloadBlob(csv, "text/csv;charset=utf-8", filename.endsWith(".csv") ? filename : `${filename}.csv`);
+    return true;
+  }
+  function exportPdfResults(pdfUrls, failures, communityName = "community") {
+    const baseFilename = createPdfExportBaseFilename(communityName);
+    const normalizedUrls = exportPdfUrlJson(pdfUrls, `${baseFilename}.json`);
+    if (failures.length > 0) {
+      exportFailuresCsv(failures, `${baseFilename}_failures.csv`);
+    }
+    return { baseFilename, pdfUrls: normalizedUrls };
+  }
+  function exportFailureList(failures, communityName = "community") {
+    if (!Array.isArray(failures) || failures.length === 0) return false;
+    const baseFilename = createPdfExportBaseFilename(communityName);
+    return exportFailuresCsv(failures, `${baseFilename}_failures.csv`);
+  }
+
+  // src/extractor.js
   function followAnchor(anchor) {
     if (!STATE.autoFollow || document.hidden) return;
     const cell = anchor?.closest?.("td");
@@ -677,23 +1058,37 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       return true;
     });
   }
-  async function exportPdfLinksAsJson({
+  function getHouseholdKey(anchor, routeValue) {
+    const params = parseOwnerParams(anchor);
+    if (params?.etrIdx) return `etr:${params.etrIdx}`;
+    if (params?.etrNo) return `etrno:${params.etrNo}`;
+    const ownerCall = anchor?.closest?.("td")?.querySelector?.("[onclick*='checkAndShowCommunityOwnerAddr']")?.getAttribute?.("onclick");
+    if (ownerCall) return `owner-call:${ownerCall}`;
+    return `fallback:${routeValue}:${describeAnchor(anchor)}`;
+  }
+  async function scanCurrentRoute({
     delayBetween = CONFIG.DELAY_BETWEEN_MS,
     collapseAfter = true,
     perItemTimeout = CONFIG.PER_ITEM_TIMEOUT_MS,
-    retries = CONFIG.MAX_RETRIES_PER_ITEM
+    retries = CONFIG.MAX_RETRIES_PER_ITEM,
+    routeValue = "",
+    seenHouseholds = /* @__PURE__ */ new Set(),
+    onItemComplete = null
   } = {}) {
-    if (STATE.acting) return;
-    const candidates = buildCandidates();
-    if (!candidates.length) {
-      setPanelStatus("\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225");
-      alert("\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225\uFF0C\u8ACB\u8ABF\u6574\u689D\u4EF6\u5F8C\u518D\u8A66\u3002");
-      return;
+    const filteredCandidates = buildCandidates();
+    const candidates = [];
+    let duplicateHouseholds = 0;
+    for (const anchor of filteredCandidates) {
+      const householdKey = getHouseholdKey(anchor, routeValue);
+      if (seenHouseholds.has(householdKey)) {
+        duplicateHouseholds++;
+        continue;
+      }
+      seenHouseholds.add(householdKey);
+      candidates.push(anchor);
     }
-    STATE.acting = true;
     const total = candidates.length;
     clearExtractionStates();
-    setPanelWorking(true, `\u64F7\u53D6 PDF \u4E2D\uFF08\u7BE9\u9078\u5F8C ${total} \u6236\uFF09`);
     resetPanelProgress(total, {
       title: "\u64F7\u53D6 PDF \u4E2D",
       stage: "\u6E96\u5099\u958B\u59CB"
@@ -778,17 +1173,148 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
         current,
         stage: got && isValidPdfHref(got) ? "\u6B64\u6236\u5B8C\u6210" : "\u6B64\u6236\u5931\u6557"
       });
+      onItemComplete?.({ found: urls.length, failed: failed.length, done: idx + 1, total });
       await sleep(delayBetween);
     }
-    const uniq = Array.from(new Set(urls));
-    downloadJson(uniq, `ycut_pdf_${Date.now()}.json`);
-    if (failed.length) log("PDF \u64F7\u53D6\u5931\u6557\u6E05\u55AE", failed);
-    setPanelWorking(false, `\u5DF2\u64F7\u53D6 ${urls.length}/${total}\uFF0C\u4E0D\u91CD\u8907 ${uniq.length}\uFF0C\u5931\u6557 ${failed.length}`);
-    updatePanelProgress(total, total, {
-      title: "\u64F7\u53D6\u5B8C\u6210",
-      current: failed.length ? `\u5931\u6557 ${failed.length} \u6236\uFF0C\u8ACB\u67E5\u770B console` : "\u5168\u90E8\u5B8C\u6210",
-      stage: `\u6210\u529F ${urls.length}\uFF0C\u4E0D\u91CD\u8907 ${uniq.length}\uFF0C\u5931\u6557 ${failed.length}`
-    });
+    return {
+      urls,
+      failed,
+      candidateCount: filteredCandidates.length,
+      scannedCount: candidates.length,
+      duplicateHouseholds
+    };
+  }
+  async function scanAllRoutes(options = {}) {
+    if (anyExtractorRunning()) return;
+    const exportButton = document.getElementById("ycut-export-json");
+    const databaseButton = document.getElementById("ycut-build-database");
+    const originalButtonDisabled = exportButton?.disabled || false;
+    const originalDatabaseButtonDisabled = databaseButton?.disabled || false;
+    const allUrls = [];
+    const allItemFailures = [];
+    const routeFailures = [];
+    const seenHouseholds = /* @__PURE__ */ new Set();
+    let successfulRoutes = 0;
+    let routeCount = 0;
+    let totalCandidates = 0;
+    let completionText = "\u6383\u63CF\u672A\u5B8C\u6210";
+    legacyExtractorState.running = true;
+    STATE.acting = true;
+    if (exportButton) {
+      exportButton.disabled = true;
+      exportButton.setAttribute("aria-busy", "true");
+    }
+    if (databaseButton) databaseButton.disabled = true;
+    setPanelWorking(true, "\u6E96\u5099\u6383\u63CF\u6240\u6709\u8DEF\u6BB5\u5206\u9801");
+    updateRouteProgress();
+    try {
+      const routeResult = await scanAllRoutePages({
+        routeTimeout: options.routeTimeout,
+        onRouteStart: ({ route, routeNumber, totalRoutes }) => {
+          routeCount = totalRoutes;
+          updateRouteProgress({
+            routeName: route.label,
+            index: routeNumber,
+            total: totalRoutes,
+            found: allUrls.length,
+            failed: routeFailures.length
+          });
+          setPanelStatus(`\u6B63\u5728\u6383\u63CF\u8DEF\u6BB5\uFF1A${route.label}`);
+        },
+        onRoute: async ({ route, routeNumber, totalRoutes }) => {
+          scan();
+          const result = await scanCurrentRoute({
+            ...options,
+            routeValue: route.value,
+            seenHouseholds,
+            onItemComplete: ({ found }) => updateRouteProgress({
+              routeName: route.label,
+              index: routeNumber,
+              total: totalRoutes,
+              found: allUrls.length + found,
+              failed: routeFailures.length
+            })
+          });
+          totalCandidates += result.candidateCount;
+          allUrls.push(...result.urls);
+          allItemFailures.push(...result.failed.map((item) => ({ ...item, route: route.label })));
+          return result;
+        },
+        onRouteComplete: ({ route, routeNumber, totalRoutes }) => {
+          successfulRoutes++;
+          updateRouteProgress({
+            routeName: route.label,
+            index: routeNumber,
+            total: totalRoutes,
+            found: allUrls.length,
+            failed: routeFailures.length
+          });
+        },
+        onRouteError: ({ failure }) => {
+          routeFailures.push(failure);
+          log("\u8DEF\u6BB5\u6383\u63CF\u5931\u6557\uFF0C\u7E7C\u7E8C\u4E0B\u4E00\u9801", failure);
+        },
+        onBeforeRestore: () => closeCurrentModalIfAny(),
+        onRestored: () => scan()
+      });
+      routeCount = routeResult.routeCount;
+      const uniqueUrls = normalizePdfUrls(allUrls);
+      if (totalCandidates === 0) {
+        completionText = "\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225";
+        alert("\u7BE9\u9078\u5F8C\u6C92\u6709\u7B26\u5408\u5EFA\u576A\u7684\u6236\u5225\uFF0C\u8ACB\u8ABF\u6574\u689D\u4EF6\u5F8C\u518D\u8A66\u3002");
+      } else {
+        const finalFailures = [
+          ...routeFailures.map((failure) => ({
+            stage: "route",
+            route: failure.route,
+            routeValue: failure.value,
+            attempts: 0,
+            reason: failure.reason
+          })),
+          ...allItemFailures.map((failure) => ({
+            stage: "PDF extraction",
+            route: failure.route,
+            door: failure.text,
+            attempts: options.retries == null ? CONFIG.MAX_RETRIES_PER_ITEM + 1 : options.retries + 1,
+            reason: failure.reason
+          }))
+        ];
+        exportPdfResults(uniqueUrls, finalFailures, getCommunityName());
+        completionText = [
+          `\u6383\u63CF\u5206\u9801\uFF1A${routeCount}`,
+          `\u6210\u529F\u5206\u9801\uFF1A${successfulRoutes}`,
+          `\u5931\u6557\u5206\u9801\uFF1A${routeFailures.length}`,
+          `\u627E\u5230 PDF\uFF1A${allUrls.length}`,
+          `\u53BB\u91CD\u5F8C PDF\uFF1A${uniqueUrls.length}`
+        ].join("\n");
+      }
+      if (allItemFailures.length) log("PDF \u64F7\u53D6\u5931\u6557\u6E05\u55AE", allItemFailures);
+      if (routeFailures.length) log("\u8DEF\u6BB5\u5931\u6557\u6E05\u55AE", routeFailures);
+      updatePanelProgress(routeCount, routeCount, {
+        title: "\u64F7\u53D6\u5B8C\u6210",
+        current: routeFailures.length ? `\u5931\u6557 ${routeFailures.length} \u500B\u5206\u9801` : "\u5168\u90E8\u5206\u9801\u5B8C\u6210",
+        stage: `PDF ${allUrls.length}\uFF0C\u53BB\u91CD\u5F8C ${uniqueUrls.length}\uFF0C\u6236\u5225\u5931\u6557 ${allItemFailures.length}`
+      });
+      updateRouteProgress({
+        routeName: "\u5168\u90E8\u5B8C\u6210",
+        index: routeCount,
+        total: routeCount,
+        found: allUrls.length,
+        failed: routeFailures.length
+      });
+    } catch (error) {
+      completionText = `\u6383\u63CF\u4E2D\u6B62\uFF1A${error?.message || "\u672A\u77E5\u932F\u8AA4"}`;
+      log("\u5168\u90E8\u8DEF\u6BB5\u6383\u63CF\u5931\u6557", error);
+    } finally {
+      setPanelWorking(false, completionText);
+      STATE.acting = false;
+      legacyExtractorState.running = false;
+      if (exportButton) {
+        exportButton.disabled = originalButtonDisabled;
+        exportButton.removeAttribute("aria-busy");
+      }
+      if (databaseButton) databaseButton.disabled = originalDatabaseButtonDisabled;
+    }
   }
 
   // src/license.js
@@ -865,7 +1391,596 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
     return false;
   }
 
+  // src/owner-api.js
+  function makeAbortError() {
+    return new DOMException("\u8CC7\u6599\u5EAB\u6383\u63CF\u5DF2\u53D6\u6D88", "AbortError");
+  }
+  function parseTranscriptDate(value) {
+    const text = String(value || "").trim();
+    const match = text.replace(/[年月.-]/g, "/").replace(/日/g, "").match(/(?:^|\D)(\d{2,4})\/(\d{1,2})\/(\d{1,2})(?:\D|$)/);
+    if (!match) return null;
+    let year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (match[1].length < 4) year += 1911;
+    if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const time = Date.UTC(year, month - 1, day);
+    const date = new Date(time);
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+    return time;
+  }
+  function parseOwnerLinkParams(link) {
+    const onclick = link?.getAttribute?.("onclick") || "";
+    const match = onclick.match(/checkAndShowCommunityOwnerAddr\((.*)\)/);
+    if (!match) return null;
+    try {
+      const values = JSON.parse(`[${match[1].replace(/'/g, '"')}]`);
+      const etrIdx = String(values[1] || "");
+      const ownerIdx = String(values[2] || "");
+      if (!etrIdx || !ownerIdx) return null;
+      return {
+        pdf: values[0] || "",
+        etrIdx,
+        ownerIdx,
+        checkViewLog: values[3] === true,
+        city: values[4] || "",
+        district: values[5] || "",
+        sessionId: values[6] || "",
+        etrNo: values[7] || "",
+        label: (link.textContent || "").replace(/\s+/g, " ").trim(),
+        displayedDateValue: parseTranscriptDate(link.textContent)
+      };
+    } catch {
+      return null;
+    }
+  }
+  function selectLatestOwnerParams(paramsList) {
+    const valid = paramsList.filter((item) => item?.etrIdx && item?.ownerIdx);
+    if (!valid.length) return null;
+    const dated = valid.filter((item) => Number.isFinite(item.displayedDateValue));
+    if (!dated.length) return { params: valid[0], usedDateFallback: true };
+    const params = dated.reduce((latest, item) => item.displayedDateValue > latest.displayedDateValue ? item : latest);
+    return { params, usedDateFallback: false };
+  }
+  function waitWithSignal(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(makeAbortError());
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(makeAbortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  async function requestOwnerDetails(params, {
+    signal,
+    timeoutMs = CONFIG.OWNER_API_TIMEOUT_MS
+  } = {}) {
+    if (signal?.aborted) throw makeAbortError();
+    const controller = new AbortController();
+    let timedOut = false;
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const response = await fetch(COMM_GATEWAY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: controller.signal,
+        body: JSON.stringify({
+          Method: "GetOwnerDetail",
+          Data: { Etr_idx: params.etrIdx, Owner_idx: params.ownerIdx }
+        })
+      });
+      if (!response.ok) throw new Error(`CommGateway HTTP ${response.status}`);
+      const result = await response.json();
+      if (String(result?.Status) !== "1") throw new Error(result?.Message || `CommGateway status ${result?.Status ?? "unknown"}`);
+      const details = Array.isArray(result.Data) ? result.Data.filter((item) => item && typeof item === "object") : [];
+      if (!details.length) throw new Error("API \u56DE\u50B3\u7A7A\u8CC7\u6599");
+      return { result, details };
+    } catch (error) {
+      if (signal?.aborted) throw makeAbortError();
+      if (timedOut) throw new Error(`GetOwnerDetail timeout\uFF08${timeoutMs}ms\uFF09`);
+      throw error;
+    } finally {
+      clearTimeout(timeoutTimer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+  async function requestOwnerDetailsWithRetry(params, {
+    signal,
+    timeoutMs = CONFIG.OWNER_API_TIMEOUT_MS,
+    retryDelays = CONFIG.OWNER_API_RETRY_DELAYS_MS,
+    onRetry
+  } = {}) {
+    const maxAttempts = retryDelays.length + 1;
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await requestOwnerDetails(params, { signal, timeoutMs });
+        return { ...response, attempts: attempt, retries: attempt - 1 };
+      } catch (error) {
+        if (error?.name === "AbortError" || signal?.aborted) throw error;
+        lastError = error;
+        if (attempt >= maxAttempts) break;
+        const delayMs = retryDelays[attempt - 1];
+        onRetry?.({ attempt, nextAttempt: attempt + 1, delayMs, error });
+        await waitWithSignal(delayMs, signal);
+      }
+    }
+    lastError.attempts = maxAttempts;
+    throw lastError;
+  }
+  function detailDate(detail) {
+    return detail?.RegPrintDate ?? detail?.TranscriptDate ?? detail?.PrintDate ?? detail?.EtrDate ?? detail?.RegDate ?? "";
+  }
+  function selectLatestDetail(details) {
+    const valid = details.filter((item) => item && typeof item === "object" && [
+      item.BuildAddr,
+      item.Address,
+      item.Owner,
+      item.PDF,
+      detailDate(item),
+      item.BuiMPin,
+      item.BuiAuxPin,
+      item.BuiTotPin
+    ].some((value) => value != null && String(value).trim() !== ""));
+    if (!valid.length) return null;
+    const dated = valid.map((detail, sourceIndex) => ({ detail, sourceIndex, dateValue: parseTranscriptDate(detailDate(detail)) })).filter((item) => Number.isFinite(item.dateValue));
+    if (!dated.length) {
+      return { detail: valid[0], sourceIndex: 0, usedDateFallback: true, parsedDateValue: null };
+    }
+    const newest = dated.reduce((latest, item) => item.dateValue > latest.dateValue ? item : latest);
+    return {
+      detail: newest.detail,
+      sourceIndex: newest.sourceIndex,
+      usedDateFallback: false,
+      parsedDateValue: newest.dateValue
+    };
+  }
+  function postalCode(detail, address) {
+    const explicit = detail?.ZipCode ?? detail?.ZIP ?? detail?.Zip ?? detail?.PostalCode ?? detail?.PostCode ?? detail?.BuildZipCode;
+    if (explicit != null && String(explicit).trim()) return String(explicit).trim();
+    return String(address || "").match(/^\s*(\d{3,6})\b/)?.[1] || "";
+  }
+  function normalizeDatabaseRecord(unit, selectedDetail, { attempts = 1 } = {}) {
+    const detail = selectedDetail.detail;
+    const address = detail.BuildAddr || detail.Address || "";
+    const pdfUrl = detail.PDF || "";
+    const usedDateFallback = !!unit.usedDateFallback || !!selectedDetail.usedDateFallback;
+    const hasValidPdf = isValidPdfHref(pdfUrl);
+    const queryResult = !hasValidPdf ? usedDateFallback ? "\u6210\u529F\uFF08\u65E5\u671F fallback\u3001\u7121\u6709\u6548 PDF\uFF09" : "\u6210\u529F\uFF08\u7121\u6709\u6548 PDF\uFF09" : usedDateFallback ? "\u6210\u529F\uFF08\u65E5\u671F fallback\uFF09" : "\u6210\u529F\uFF08\u6700\u65B0\u65E5\u671F\uFF09";
+    return {
+      \u8DEF\u6BB5: unit.routeLabel,
+      \u9580\u724C: unit.householdLabel,
+      \u6240\u6709\u6B0A\u4EBA: detail.Owner || "",
+      \u90F5\u905E\u5340\u865F: postalCode(detail, address),
+      \u5B8C\u6574\u5730\u5740: address,
+      \u4E3B\u5EFA\u576A: detail.BuiMPin ?? "",
+      \u9644\u5C6C\u576A: detail.BuiAuxPin ?? "",
+      \u7E3D\u576A: detail.BuiTotPin ?? "",
+      \u8B04\u672C\u65E5\u671F: detailDate(detail),
+      "PDF URL": pdfUrl,
+      Etr_idx: unit.params.etrIdx,
+      Owner_idx: unit.params.ownerIdx,
+      \u67E5\u8A62\u7D50\u679C: queryResult,
+      \u65E5\u671Ffallback: usedDateFallback,
+      API\u5617\u8A66\u6B21\u6578: attempts
+    };
+  }
+  function databaseRecordKey(record) {
+    return `${record.Etr_idx}|${record.Owner_idx}|${record["PDF URL"] || ""}`;
+  }
+
+  // src/database-scanner.js
+  function doorplateForCell(cell) {
+    const tables = [cell.closest("table"), document.querySelector("table#BuAddr")].filter((table, index, items) => table && items.indexOf(table) === index);
+    for (const table of tables) {
+      for (const row of Array.from(table.rows || [])) {
+        const header = row.cells?.[cell.cellIndex];
+        if (!header || header === cell) continue;
+        const text = (header.childNodes?.[0]?.textContent || header.textContent || "").replace(/^選\s*/, "").replace(/\s+/g, " ").trim();
+        if (text.includes("\u865F")) return text;
+      }
+    }
+    return "";
+  }
+  function floorForCell(cell) {
+    const container = document.querySelector("#CommunityCase");
+    let current = cell.closest("table");
+    while (current && current !== container) {
+      let previous = current.previousElementSibling;
+      while (previous) {
+        const text = (previous.textContent || "").replace(/\s+/g, " ").trim();
+        const match = text.match(/(?:地下\s*)?[一二三四五六七八九十百千零〇0-9ＢB-]+\s*樓/);
+        if (match) return match[0].replace(/\s+/g, "");
+        previous = previous.previousElementSibling;
+      }
+      current = current.parentElement;
+    }
+    return "";
+  }
+  function collectCurrentRouteHouseholds(route, routeNumber) {
+    const units = [];
+    const cells = document.querySelectorAll("#CommunityCase td");
+    for (const cell of cells) {
+      const links = Array.from(cell.querySelectorAll("ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"));
+      if (!links.length) continue;
+      const candidates = links.map(parseOwnerLinkParams).filter(Boolean);
+      const selected = selectLatestOwnerParams(candidates);
+      if (!selected) continue;
+      const doorplate = doorplateForCell(cell);
+      const floor = floorForCell(cell);
+      const householdLabel = [doorplate, floor].filter(Boolean).join(" ") || (cell.textContent || "").replace(/\s+/g, " ").trim() || `${route.label} \u6236\u5225`;
+      const householdKey = candidates.map((item) => `${item.etrIdx}:${item.ownerIdx}`).sort().join("|");
+      units.push({
+        routeLabel: route.label,
+        routeValue: route.value,
+        routeNumber,
+        doorplate,
+        floor,
+        householdLabel,
+        householdKey: householdKey || `${route.value}:${householdLabel}`,
+        params: selected.params,
+        usedDateFallback: selected.usedDateFallback
+      });
+    }
+    return units;
+  }
+  function getCurrentHouseholdRows() {
+    return Array.from(document.querySelectorAll("#CommunityCase td")).filter((cell) => cell.querySelector("ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"));
+  }
+  function getHouseholdListFingerprint() {
+    const container = document.querySelector("#CommunityCase");
+    if (!container) return "";
+    return Array.from(container.querySelectorAll(
+      "ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"
+    )).map((link) => (link.getAttribute("onclick") || "").replace(/\s+/g, " ").trim()).filter(Boolean).sort().join("|");
+  }
+  async function waitForHouseholdListStable({
+    previousFingerprint,
+    requireChange,
+    signal,
+    timeout = 15e3,
+    interval = 200,
+    stableChecks = 3
+  }) {
+    const startedAt = Date.now();
+    let lastFingerprint = "";
+    let stableCount = 0;
+    while (Date.now() - startedAt < timeout) {
+      throwIfAborted(signal);
+      const rows = getCurrentHouseholdRows();
+      const fingerprint = getHouseholdListFingerprint();
+      const changedFromPrevious = !!fingerprint && fingerprint !== previousFingerprint;
+      const isCurrentList = rows.length > 0 && (!requireChange || changedFromPrevious);
+      if (isCurrentList) {
+        if (fingerprint === lastFingerprint) stableCount++;
+        else {
+          lastFingerprint = fingerprint;
+          stableCount = 1;
+        }
+        if (stableCount >= stableChecks) {
+          return { currentFingerprint: fingerprint, rowCount: rows.length };
+        }
+      } else {
+        stableCount = 0;
+        lastFingerprint = fingerprint;
+      }
+      await sleep(interval);
+    }
+    throw new Error("\u7B49\u5F85\u65B0\u6236\u5225\u6E05\u55AE\u8F09\u5165\u903E\u6642");
+  }
+  async function loadDatabaseRouteWithRetry(route, { signal, routeTimeout, maxAttempts = 3 } = {}) {
+    const previousFingerprint = getHouseholdListFingerprint();
+    const selectedBeforeSwitch = getRouteSelect()?.value ?? "";
+    const requireChange = selectedBeforeSwitch !== route.value;
+    let lastError;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      throwIfAborted(signal);
+      try {
+        await switchRouteAndWait(
+          route,
+          Math.min(routeTimeout || CONFIG.ROUTE_REFRESH_TIMEOUT_MS, 1e4),
+          signal,
+          { forceRefresh: attempt > 1 }
+        );
+        const actualRouteValue = getRouteSelect()?.value ?? "";
+        if (actualRouteValue !== route.value) {
+          throw new Error(`\u8DEF\u6BB5\u5207\u63DB\u5931\u6557\uFF1A\u9810\u671F ${route.value}\uFF0C\u5BE6\u969B ${actualRouteValue}`);
+        }
+        await waitForHouseholdListStable({
+          previousFingerprint,
+          requireChange,
+          signal
+        });
+        return true;
+      } catch (error) {
+        if (error?.name === "AbortError" || signal?.aborted) throw error;
+        lastError = error;
+      }
+    }
+    if (lastError) lastError.routeAttempts = maxAttempts;
+    throw lastError || new Error(`\u8DEF\u6BB5\u8F09\u5165\u5931\u6557\uFF1A${route.label}`);
+  }
+  function routeDoorplateRange(routeLabel) {
+    const match = String(routeLabel || "").match(/(\d+)\s*[~～至到\-－]\s*(\d+)/);
+    if (!match) return null;
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    return { min: Math.min(first, second), max: Math.max(first, second) };
+  }
+  function doorplateNumber(doorplate) {
+    const match = String(doorplate || "").match(/(\d+)(?:\s*之\s*\d+)?\s*號/);
+    return match ? Number(match[1]) : null;
+  }
+  function snapshotButtonStates() {
+    const ids = ["ycut-export-json", "ycut-build-database", "ycut-cancel-database", "ycut-export-failures"];
+    return new Map(ids.map((id) => {
+      const button = document.getElementById(id);
+      return [id, button ? button.disabled : null];
+    }));
+  }
+  function setDatabaseButtonsRunning(running) {
+    const legacyButton = document.getElementById("ycut-export-json");
+    const databaseButton = document.getElementById("ycut-build-database");
+    const cancelButton = document.getElementById("ycut-cancel-database");
+    const failureButton = document.getElementById("ycut-export-failures");
+    if (legacyButton) legacyButton.disabled = running;
+    if (databaseButton) databaseButton.disabled = running;
+    if (cancelButton) cancelButton.disabled = !running;
+    if (failureButton && running) failureButton.disabled = true;
+  }
+  function restoreButtons(states) {
+    for (const [id, disabled] of states) {
+      if (disabled == null) continue;
+      const button = document.getElementById(id);
+      if (button) button.disabled = disabled;
+    }
+    const failureButton = document.getElementById("ycut-export-failures");
+    if (failureButton) failureButton.disabled = databaseExtractorState.lastFailures.length === 0;
+  }
+  function databaseProgress(metrics, extra = {}) {
+    updateDatabaseProgress({
+      routeNumber: metrics.routeNumber,
+      totalRoutes: metrics.totalRoutes,
+      scannedHouseholds: metrics.processedHouseholds,
+      totalHouseholds: metrics.totalHouseholds,
+      apiSuccess: metrics.apiSuccess,
+      apiRetries: metrics.apiRetries,
+      apiFailed: metrics.apiFailed,
+      validPdf: metrics.validPdf,
+      duplicateSkipped: metrics.duplicateSkipped,
+      ...extra
+    });
+  }
+  function cancelDatabaseScan() {
+    if (!databaseExtractorState.running) return;
+    databaseExtractorState.cancelRequested = true;
+    databaseExtractorState.abortController?.abort();
+  }
+  function exportLastDatabaseFailures() {
+    exportFailureList(databaseExtractorState.lastFailures, databaseExtractorState.lastCommunityName);
+  }
+  async function buildPdfDatabase() {
+    if (anyExtractorRunning()) return;
+    const buttonStates = snapshotButtonStates();
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const community = getCommunityName();
+    const units = [];
+    const unitKeys = /* @__PURE__ */ new Set();
+    const records = [];
+    const recordKeys = /* @__PURE__ */ new Set();
+    const failures = [];
+    const metrics = {
+      routeNumber: 0,
+      totalRoutes: 0,
+      successfulRoutes: 0,
+      processedHouseholds: 0,
+      totalHouseholds: 0,
+      apiSuccess: 0,
+      apiRetries: 0,
+      apiFailed: 0,
+      validPdf: 0,
+      duplicateSkipped: 0
+    };
+    let completionText = "\u8CC7\u6599\u5EAB\u6383\u63CF\u672A\u5B8C\u6210";
+    databaseExtractorState.running = true;
+    databaseExtractorState.cancelRequested = false;
+    databaseExtractorState.abortController = controller;
+    databaseExtractorState.lastCommunityName = community;
+    databaseExtractorState.lastFailures = [];
+    STATE.acting = true;
+    setDatabaseButtonsRunning(true);
+    setProgressMode("database");
+    setPanelWorking(true, "\u6B63\u5728\u6536\u96C6\u6240\u6709\u8DEF\u6BB5\u6236\u5225");
+    databaseProgress(metrics, { phase: "\u6536\u96C6\u6236\u5225" });
+    try {
+      const routeResult = await scanAllRoutePages({
+        signal,
+        loadRoute: async ({ route, routeTimeout, signal: routeSignal }) => {
+          await loadDatabaseRouteWithRetry(route, {
+            signal: routeSignal,
+            routeTimeout
+          });
+        },
+        onRouteStart: ({ routeNumber, totalRoutes }) => {
+          metrics.routeNumber = routeNumber;
+          metrics.totalRoutes = totalRoutes;
+          databaseProgress(metrics, { phase: "\u5207\u63DB\u8DEF\u6BB5" });
+        },
+        onRoute: async ({ route, routeNumber, totalRoutes }) => {
+          throwIfAborted(signal);
+          const selectedRouteValue = getRouteSelect()?.value ?? "";
+          if (!route.currentOnly && selectedRouteValue !== route.value) {
+            throw new Error(`\u8DEF\u6BB5\u5207\u63DB\u5931\u6557\uFF1A\u9810\u671F ${route.value}\uFF0C\u5BE6\u969B ${selectedRouteValue}`);
+          }
+          scan();
+          const currentUnits = collectCurrentRouteHouseholds(route, routeNumber);
+          const range = routeDoorplateRange(route.label);
+          for (const unit of currentUnits) {
+            const parsedDoorplate = doorplateNumber(unit.doorplate);
+            if (!unit.doorplate?.trim()) continue;
+            if (range && parsedDoorplate != null && (parsedDoorplate < range.min || parsedDoorplate > range.max)) continue;
+            if (unitKeys.has(unit.householdKey)) {
+              metrics.duplicateSkipped++;
+              continue;
+            }
+            unitKeys.add(unit.householdKey);
+            units.push(unit);
+          }
+          metrics.totalHouseholds = units.length;
+          metrics.routeNumber = routeNumber;
+          metrics.totalRoutes = totalRoutes;
+          databaseProgress(metrics, { phase: "\u6536\u96C6\u6236\u5225" });
+          return { householdCount: currentUnits.length };
+        },
+        onRouteError: ({ error, failure }) => {
+          const failureItem = {
+            stage: "route",
+            route: failure.route,
+            routeValue: failure.value,
+            reason: failure.reason,
+            attempts: error?.routeAttempts || 0,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          failures.push(failureItem);
+          databaseProgress(metrics, { phase: "\u8DEF\u6BB5\u5931\u6557" });
+        },
+        onRestored: () => scan()
+      });
+      metrics.totalRoutes = routeResult.routeCount;
+      metrics.successfulRoutes = routeResult.successfulRoutes;
+      metrics.totalHouseholds = units.length;
+      for (let index = 0; index < units.length; index++) {
+        throwIfAborted(signal);
+        const unit = units[index];
+        metrics.routeNumber = unit.routeNumber;
+        databaseProgress(metrics, { phase: `\u67E5\u8A62\u6236\u5225\uFF1A${unit.householdLabel}` });
+        let apiAttempts = 0;
+        try {
+          const response = await requestOwnerDetailsWithRetry(unit.params, {
+            signal,
+            onRetry: () => {
+              metrics.apiRetries++;
+              databaseProgress(metrics, { phase: `API \u91CD\u8A66\uFF1A${unit.householdLabel}` });
+            }
+          });
+          apiAttempts = response.attempts;
+          const selectedDetail = selectLatestDetail(response.details);
+          if (!selectedDetail) throw new Error("API \u6C92\u6709\u53EF\u7528\u7684\u8B04\u672C\u8CC7\u6599");
+          const record = normalizeDatabaseRecord(unit, selectedDetail, { attempts: response.attempts });
+          metrics.apiSuccess++;
+          const key = databaseRecordKey(record);
+          if (recordKeys.has(key)) {
+            metrics.duplicateSkipped++;
+          } else {
+            recordKeys.add(key);
+            records.push(record);
+            if (isValidPdfHref(record["PDF URL"])) {
+              metrics.validPdf++;
+            } else {
+              failures.push({
+                stage: "PDF validation",
+                route: unit.routeLabel,
+                routeValue: unit.routeValue,
+                door: unit.householdLabel,
+                etr_idx: unit.params.etrIdx,
+                owner_idx: unit.params.ownerIdx,
+                attempts: response.attempts,
+                reason: "GetOwnerDetail \u56DE\u50B3\u6C92\u6709\u6709\u6548 PDF URL",
+                timestamp: (/* @__PURE__ */ new Date()).toISOString()
+              });
+            }
+          }
+        } catch (error) {
+          if (error?.name === "AbortError" || signal.aborted) throw error;
+          metrics.apiFailed++;
+          failures.push({
+            stage: "GetOwnerDetail",
+            route: unit.routeLabel,
+            routeValue: unit.routeValue,
+            door: unit.householdLabel,
+            etr_idx: unit.params.etrIdx,
+            owner_idx: unit.params.ownerIdx,
+            attempts: error?.attempts || apiAttempts || 3,
+            reason: error?.message || "GetOwnerDetail \u5931\u6557",
+            usedDateFallback: unit.usedDateFallback,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+        metrics.processedHouseholds = index + 1;
+        databaseProgress(metrics, { phase: "\u67E5\u8A62 API" });
+        if (index + 1 < units.length) await waitWithSignal(CONFIG.DATABASE_API_GAP_MS, signal);
+      }
+      databaseExtractorState.lastFailures = failures;
+      const validUrlsBeforeExport = records.map((record) => record["PDF URL"]).filter(isValidPdfHref);
+      const exported = exportPdfResults(validUrlsBeforeExport, failures, community);
+      metrics.duplicateSkipped += validUrlsBeforeExport.length - exported.pdfUrls.length;
+      metrics.validPdf = exported.pdfUrls.length;
+      completionText = [
+        `\u6383\u63CF\u8DEF\u6BB5\uFF1A${metrics.totalRoutes}`,
+        `\u6210\u529F\u8DEF\u6BB5\uFF1A${metrics.successfulRoutes}`,
+        `\u6236\u5225\u7E3D\u6578\uFF1A${metrics.totalHouseholds}`,
+        `API\u6210\u529F\uFF1A${metrics.apiSuccess}`,
+        `API\u5931\u6557\uFF1A${metrics.apiFailed}`,
+        `\u6709\u6548PDF\uFF1A${metrics.validPdf}`,
+        `\u91CD\u8907\u7565\u904E\uFF1A${metrics.duplicateSkipped}`
+      ].join("\n");
+      databaseProgress(metrics, { phase: "\u8CC7\u6599\u5EAB\u5EFA\u7ACB\u5B8C\u6210" });
+    } catch (error) {
+      databaseExtractorState.lastFailures = failures;
+      if (error?.name === "AbortError" || signal.aborted) {
+        completionText = `\u8CC7\u6599\u5EAB\u6383\u63CF\u5DF2\u53D6\u6D88
+\u5DF2\u8655\u7406\u6236\u5225\uFF1A${metrics.processedHouseholds} / ${metrics.totalHouseholds}`;
+        databaseProgress(metrics, { phase: "\u5DF2\u53D6\u6D88" });
+      } else {
+        completionText = `\u8CC7\u6599\u5EAB\u6383\u63CF\u4E2D\u6B62\uFF1A${error?.message || "\u672A\u77E5\u932F\u8AA4"}`;
+        log("PDF \u8CC7\u6599\u5EAB\u6383\u63CF\u4E2D\u6B62", error);
+        databaseProgress(metrics, { phase: "\u6383\u63CF\u4E2D\u6B62" });
+      }
+    } finally {
+      controller.abort();
+      databaseExtractorState.abortController = null;
+      databaseExtractorState.running = false;
+      databaseExtractorState.cancelRequested = false;
+      STATE.acting = false;
+      setPanelWorking(false, completionText);
+      restoreButtons(buttonStates);
+    }
+    return { records, failures, metrics };
+  }
+
+  // src/disclaimer.js
+  var DISCLAIMER_VERSION = 1;
+  var DISCLAIMER_STORAGE_KEY = `ycut_disclaimer_accepted_v${DISCLAIMER_VERSION}`;
+  async function getDisclaimerAccepted() {
+    try {
+      const stored = await chrome.storage.local.get([DISCLAIMER_STORAGE_KEY]);
+      const record = stored?.[DISCLAIMER_STORAGE_KEY];
+      return record?.accepted === true && record?.version === DISCLAIMER_VERSION;
+    } catch {
+      return false;
+    }
+  }
+
   // src/content.js
+  var ycutInitialized = false;
+  var bootstrapPromise = null;
+  var authorizationRetryRequested = false;
   function bindHotkeys() {
     document.addEventListener("keydown", (e) => {
       if (e.altKey && e.shiftKey && e.code === "KeyU") {
@@ -897,33 +2012,100 @@ chrome.runtime.sendMessage({type:'YCUT_AUTOCONFIRM'});
       onDoorplateNone: () => setAllDoorplateCheckboxes(false),
       onExport: async () => {
         if (!await requireLicenseForPremiumAction()) return;
-        exportPdfLinksAsJson({
+        setProgressMode("legacy");
+        await scanAllRoutes({
           delayBetween: CONFIG.DELAY_BETWEEN_MS,
           collapseAfter: true,
           perItemTimeout: CONFIG.PER_ITEM_TIMEOUT_MS,
           retries: CONFIG.MAX_RETRIES_PER_ITEM
         });
+      },
+      onBuildDatabase: async () => {
+        if (!await requireLicenseForPremiumAction()) return;
+        await buildPdfDatabase();
+      },
+      onCancelDatabase: () => cancelDatabaseScan(),
+      onExportFailures: () => exportLastDatabaseFailures()
+    });
+  }
+  function bindRuntimeMessages() {
+    chrome.runtime?.onMessage?.addListener?.((m) => {
+      if (!m?.type) return;
+      if (m.type === "YCUT_SCAN") {
+        scan();
+        return true;
+      }
+      if (m.type === "YCUT_TOGGLE_HIGHLIGHT") {
+        applyHighlight(!STATE.highlighted);
+        return true;
       }
     });
   }
-  chrome.runtime?.onMessage?.addListener?.((m) => {
-    if (!m?.type) return;
-    if (m.type === "YCUT_SCAN") {
-      scan();
-      return true;
-    }
-    if (m.type === "YCUT_TOGGLE_HIGHLIGHT") {
-      applyHighlight(!STATE.highlighted);
-      return true;
-    }
-  });
-  function init() {
+  async function initializeYCutExtractor() {
+    if (ycutInitialized) return;
     if (!location.href.includes("Community.aspx")) return;
+    ycutInitialized = true;
+    chrome.runtime?.sendMessage?.({ type: "YCUT_AUTOCONFIRM" });
     bindHotkeys();
+    bindRuntimeMessages();
     watchDom();
     mountPanelWithHandlers();
     scan();
   }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
+  async function bootstrapYCutExtractor() {
+    if (ycutInitialized) return;
+    if (bootstrapPromise) return bootstrapPromise;
+    bootstrapPromise = (async () => {
+      if (!location.href.includes("Community.aspx")) return;
+      let authorized = false;
+      try {
+        authorized = await hasValidLicense();
+      } catch {
+        authorized = false;
+      }
+      if (!authorized) return;
+      const accepted = await getDisclaimerAccepted();
+      if (!accepted) return;
+      await initializeYCutExtractor();
+    })();
+    try {
+      return await bootstrapPromise;
+    } finally {
+      bootstrapPromise = null;
+      if (!ycutInitialized && authorizationRetryRequested) {
+        authorizationRetryRequested = false;
+        setTimeout(() => bootstrapYCutExtractor(), 0);
+      } else {
+        authorizationRetryRequested = false;
+      }
+    }
+  }
+  chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
+    if (areaName !== "local") return;
+    const licenseBecameValid = changes.license_status?.newValue === "valid";
+    const disclaimerRecord = changes[DISCLAIMER_STORAGE_KEY]?.newValue;
+    const disclaimerWasAccepted = disclaimerRecord?.accepted === true && disclaimerRecord?.version === DISCLAIMER_VERSION;
+    if (!licenseBecameValid && !disclaimerWasAccepted) return;
+    authorizationRetryRequested = true;
+    if (!bootstrapPromise && !ycutInitialized) {
+      authorizationRetryRequested = false;
+      bootstrapYCutExtractor();
+    }
+  });
+  chrome.runtime?.onMessage?.addListener?.((message, sender, sendResponse) => {
+    if (message?.type === "YCUT_GATE_PING") {
+      sendResponse?.({ ok: true });
+      return;
+    }
+    if (message?.type === "YCUT_DISCLAIMER_ACCEPTED") {
+      bootstrapYCutExtractor().catch(() => {
+      });
+      sendResponse?.({ ok: true });
+    }
+  });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => bootstrapYCutExtractor(), { once: true });
+  } else {
+    bootstrapYCutExtractor();
+  }
 })();

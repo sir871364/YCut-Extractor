@@ -48,7 +48,7 @@ td.ycut-extract-failed {
   color: #fff;
   border-radius: 999px;
   line-height: 1;
-  z-index: 2147483647;
+  z-index: 2147483000;
   box-shadow: 0 2px 6px rgba(0,0,0,.25);
 }
 
@@ -57,7 +57,7 @@ td.ycut-extract-failed {
   position: fixed;
   right: 18px;
   bottom: 18px;
-  z-index: 2147483647;
+  z-index: 2147483000;
   background: #111827;
   color: #f9fafb;
   border: 1px solid #374151;
@@ -91,6 +91,10 @@ td.ycut-extract-failed {
 #ycut-blue-user-panel button:hover {
   background: #374151;
 }
+#ycut-blue-user-panel button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
 #ycut-blue-user-panel .count {
   font-weight: 700;
   color: #93c5fd;
@@ -99,6 +103,7 @@ td.ycut-extract-failed {
   font-size: 12px;
   opacity: .8;
   margin-top: 4px;
+  white-space: pre-line;
 }
 #ycut-progress-box {
   display: grid;
@@ -117,6 +122,34 @@ td.ycut-extract-failed {
   gap: 8px;
   color: #bfdbfe;
   font-weight: 700;
+}
+#ycut-route-current {
+  color: #f9fafb;
+  font-weight: 700;
+}
+#ycut-progress-box .ycut-route-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 8px;
+  color: #bfdbfe;
+}
+#ycut-progress-box .ycut-route-meta span:first-child {
+  grid-column: 1 / -1;
+}
+#ycut-database-progress[hidden],
+#ycut-legacy-progress[hidden] {
+  display: none;
+}
+#ycut-db-route {
+  color: #f9fafb;
+  font-weight: 700;
+}
+#ycut-progress-box .ycut-database-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 8px;
+  margin-top: 4px;
+  color: #bfdbfe;
 }
 .ycut-progress-track {
   height: 8px;
