@@ -1,0 +1,13 @@
+{
+  "name": "ycut-extractor",
+  "version": "1.2.1",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/content.js --bundle --outfile=content.js --platform=browser --format=iife",
+    "watch": "esbuild src/content.js --bundle --outfile=content.js --platform=browser --format=iife --watch",
+    "test": "node tests/owner-api.test.cjs && node tests/export.test.cjs && node tests/disclaimer.test.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

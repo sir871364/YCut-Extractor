@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>YCUT Blue User Scanner</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        margin: 12px;
+        width: 320px;
+      }
+      h1 { font-size: 16px; margin: 0 0 8px 0; }
+      button {
+        appearance: none;
+        border: 1px solid #ddd;
+        background: #fff;
+        padding: 6px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover { background: #f6f6f6; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .row { display:flex; gap:8px; margin:8px 0; }
+      .muted { font-size: 12px; color: #666; }
+      .status { font-size: 12px; margin-top: 6px; line-height: 1.45; }
+      .ok { color: #12805c; }
+      .bad { color: #c62828; }
+      .box { border: 1px solid #eee; border-radius: 10px; padding: 10px; margin: 10px 0; background: #fafafa; }
+      .qr-box {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 210px;
+        background: #fff;
+        border: 1px solid #eee;
+        border-radius: 10px;
+        margin: 8px 0;
+      }
+      .qr-box img {
+        width: 200px;
+        height: 200px;
+      }
+      .timer {
+        font-size: 12px;
+        color: #555;
+        margin-top: 6px;
+      }
+      .install-id {
+        font-size: 11px;
+        color: #777;
+        word-break: break-all;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>YCUT 藍色小人工具</h1>
+
+    <div id="licensePanel" class="box">
+      <div class="muted">請管理員掃描 QR Code 核准</div>
+      <div class="qr-box"><img id="licenseQr" alt="授權 QR Code"></div>
+      <div class="row">
+        <button id="refreshQrBtn" type="button">重新產生 QR Code</button>
+      </div>
+      <div id="licenseStatus" class="status muted">正在檢查授權...</div>
+      <div id="qrTimer" class="timer">--:--</div>
+      <div id="installIdText" class="install-id"></div>
+    </div>
+
+    <div class="row">
+      <button id="scan">重新掃描</button>
+      <button id="toggle">切換高亮</button>
+    </div>
+
+    <p class="muted">僅在 <code>Community.aspx</code> 頁面生效。</p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

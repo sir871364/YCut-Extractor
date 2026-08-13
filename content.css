@@ -1,0 +1,346 @@
+/* 小人高亮框線 */
+.ycut-blue-user-highlight {
+  outline: 3px solid #2d7cff !important;
+  outline-offset: 2px;
+  border-radius: 6px;
+  transition: outline-color 120ms ease;
+}
+
+td.ycut-extract-active {
+  outline: 3px solid #2d7cff !important;
+  outline-offset: -3px;
+  background: rgba(45, 124, 255, .14) !important;
+  box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .28), 0 0 0 4px rgba(45, 124, 255, .12);
+  animation: ycut-active-pulse 1.2s ease-in-out infinite;
+}
+
+td.ycut-extract-done {
+  outline: 3px solid #16a34a !important;
+  outline-offset: -3px;
+  background: rgba(22, 163, 74, .16) !important;
+  box-shadow: inset 0 0 0 2px rgba(22, 163, 74, .24);
+}
+
+td.ycut-extract-failed {
+  outline: 3px solid #dc2626 !important;
+  outline-offset: -3px;
+  background: rgba(220, 38, 38, .14) !important;
+  box-shadow: inset 0 0 0 2px rgba(220, 38, 38, .24);
+}
+
+@keyframes ycut-active-pulse {
+  0%, 100% {
+    box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .28), 0 0 0 4px rgba(45, 124, 255, .10);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px rgba(45, 124, 255, .42), 0 0 0 7px rgba(45, 124, 255, .18);
+  }
+}
+
+/* 小人右上角徽章 */
+.ycut-blue-user-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  padding: 2px 6px;
+  min-width: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  /* 容器只有圖示那麼寬，不鎖住就會把「10」折成兩行 */
+  white-space: nowrap;
+  word-break: keep-all;
+  background: #2d7cff;
+  color: #fff;
+  border-radius: 999px;
+  line-height: 1;
+  z-index: 2147483000;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+}
+
+/* 三位數以上（例如 955 戶的路段）縮排版，避免壓到隔壁欄 */
+.ycut-blue-user-badge.is-wide {
+  padding: 2px 4px;
+  font-size: 11px;
+  right: -10px;
+}
+
+/* 浮動面板 */
+#ycut-blue-user-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483000;
+  background: #111827;
+  color: #f9fafb;
+  border: 1px solid #374151;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  min-width: 260px;
+}
+#ycut-blue-user-panel h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+#ycut-blue-user-panel .ycut-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+#ycut-blue-user-panel .ycut-version {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #7e8ba3;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+#ycut-blue-user-panel .ycut-version.is-stale {
+  color: #fca5a5;
+  font-weight: 700;
+}
+#ycut-blue-user-panel .ycut-foot span.is-stale {
+  color: #fca5a5;
+  font-weight: 700;
+}
+#ycut-blue-user-panel .ycut-count-chip {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1e3a5f;
+  font-size: 12px;
+  color: #bfdbfe;
+}
+#ycut-blue-user-panel .count {
+  font-weight: 700;
+  color: #93c5fd;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分區：每區一條淡線，避免所有按鈕黏成一團 */
+#ycut-blue-user-panel .ycut-section {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px solid #273244;
+}
+#ycut-blue-user-panel .ycut-section-title {
+  font-size: 11px;
+  letter-spacing: .08em;
+  color: #7e8ba3;
+}
+
+/* 按鈕一律等寬網格，寬度不再隨字數亂跳 */
+#ycut-blue-user-panel .ycut-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+#ycut-blue-user-panel .ycut-btn-grid.ycut-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+#ycut-blue-user-panel button {
+  appearance: none;
+  border: 1px solid #2c3a4f;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #1f2937;
+  color: #e5e7eb;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+#ycut-blue-user-panel button:hover:not(:disabled) {
+  background: #374151;
+  border-color: #46587a;
+}
+#ycut-blue-user-panel button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+#ycut-blue-user-panel button.is-primary {
+  background: #1d4ed8;
+  border-color: #2563eb;
+  color: #fff;
+  font-weight: 700;
+}
+#ycut-blue-user-panel button.is-primary:hover:not(:disabled) {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+#ycut-blue-user-panel button.is-danger {
+  background: #3f1d1d;
+  border-color: #7f2c2c;
+  color: #fecaca;
+}
+#ycut-blue-user-panel button.is-danger:hover:not(:disabled) {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+}
+#ycut-blue-user-panel button.is-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: #9aa6bd;
+  padding: 4px 8px;
+}
+#ycut-blue-user-panel button.is-ghost:hover:not(:disabled) {
+  background: #1f2937;
+}
+
+#ycut-blue-user-panel .ycut-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#ycut-blue-user-panel .ycut-field label {
+  flex: none;
+  width: 34px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+#ycut-blue-user-panel .ycut-field input[type="number"] {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid #2c3a4f;
+  background: #0b1220;
+  color: #e5e7eb;
+  font-size: 12px;
+}
+#ycut-blue-user-panel .ycut-tilde {
+  flex: none;
+  color: #7e8ba3;
+}
+#ycut-blue-user-panel .ycut-hint {
+  font-size: 11px;
+  color: #8b97ad;
+}
+#ycut-blue-user-panel .ycut-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+}
+#ycut-blue-user-panel .ycut-check input {
+  margin: 1px 0 0 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+#ycut-blue-user-panel .ycut-check em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: #7e8ba3;
+}
+
+#ycut-blue-user-panel .ycut-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #273244;
+  font-size: 11px;
+  color: #7e8ba3;
+}
+#ycut-progress {
+  font-size: 12px;
+  opacity: .8;
+  margin-top: 4px;
+  white-space: pre-line;
+}
+#ycut-progress-box {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+}
+#ycut-progress-box:not(.is-working) {
+  opacity: .82;
+}
+#ycut-progress-box .ycut-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #bfdbfe;
+  font-weight: 700;
+}
+#ycut-route-current {
+  color: #f9fafb;
+  font-weight: 700;
+}
+#ycut-progress-box .ycut-route-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 8px;
+  color: #bfdbfe;
+}
+#ycut-progress-box .ycut-route-meta span:first-child {
+  grid-column: 1 / -1;
+}
+#ycut-database-progress[hidden],
+#ycut-legacy-progress[hidden] {
+  display: none;
+}
+#ycut-db-route {
+  color: #f9fafb;
+  font-weight: 700;
+}
+#ycut-progress-box .ycut-database-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 8px;
+  margin-top: 4px;
+  color: #bfdbfe;
+}
+.ycut-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #1f2937;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+#ycut-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2d7cff, #22c55e);
+  transition: width 220ms ease;
+}
+#ycut-progress-bar.is-complete {
+  background: #16a34a;
+}
+#ycut-progress-stage {
+  overflow: hidden;
+  color: #e5e7eb;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 把 I智慧 的灰色全畫面遮罩改成透明 */
+.blockUI,
+.ui-blockui,
+.blockOverlay,
+.modal-backdrop {
+  background: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
