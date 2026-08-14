@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Manifest-V3-blue">
-  <img src="https://img.shields.io/badge/Version-1.0-brightgreen">
+  <img src="https://img.shields.io/badge/Version-1.2.1-brightgreen">
   <img src="https://img.shields.io/badge/Chrome-Extension-orange">
 </p>
 
@@ -19,7 +19,7 @@
 ## Screenshot
 
 <p align="center">
-  <img src="screenshots/screenshot.png" width="720" alt="Screenshot">
+  <img src="screenshots/screenshot.png" width="420" alt="控制面板（掃描進行中）">
 </p>
 
 ---
