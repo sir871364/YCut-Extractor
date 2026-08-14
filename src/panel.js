@@ -289,7 +289,7 @@ export function mountPanel({
         <input id="ycut-area-max" type="number" placeholder="最大">
       </div>
       <div class="ycut-btn-grid ycut-grid-3">
-        <button id="ycut-doorplate-toggle">門牌勾選：關</button>
+        <button id="ycut-doorplate-toggle"${STATE.doorplateSelectEnabled ? ' class="is-on"' : ""}>門牌勾選：${STATE.doorplateSelectEnabled ? "開" : "關"}</button>
         <button id="ycut-doorplate-all">全選</button>
         <button id="ycut-doorplate-none">全不選</button>
       </div>
@@ -357,8 +357,10 @@ export function mountPanel({
 
   panel.querySelector("#ycut-doorplate-toggle").addEventListener("click", () => {
     STATE.doorplateSelectEnabled = !STATE.doorplateSelectEnabled;
-    panel.querySelector("#ycut-doorplate-toggle").textContent =
-      `門牌勾選：${STATE.doorplateSelectEnabled ? "開" : "關"}`;
+    const button = panel.querySelector("#ycut-doorplate-toggle");
+    button.textContent = `門牌勾選：${STATE.doorplateSelectEnabled ? "開" : "關"}`;
+    // 這裡的預設是「關」，所以要標示的是「開」＝篩選生效中，跟「跟隨」剛好相反
+    button.classList.toggle("is-on", STATE.doorplateSelectEnabled);
     onDoorplateToggle(STATE.doorplateSelectEnabled);
   });
 

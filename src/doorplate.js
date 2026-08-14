@@ -84,6 +84,8 @@ export function getDoorplateByColIndex(colIdx) {
 export function updateSelectedDoorplateText() {
   const el = document.getElementById("ycut-doorplate-selected");
   if (!el) return;
+  // 提示文字與按鈕是同一個狀態的兩種呈現，一起亮起來才不會各說各話
+  el.closest(".ycut-hint")?.classList.toggle("is-on", STATE.doorplateSelectEnabled);
   if (!STATE.doorplateSelectEnabled) { el.textContent = "（未啟用）"; return; }
   if (STATE.selectedColIdx.size === 0) { el.textContent = "（未勾選＝全部門牌）"; return; }
   const names = Array.from(STATE.selectedColIdx)

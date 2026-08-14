@@ -215,6 +215,7 @@
   function updateSelectedDoorplateText() {
     const el = document.getElementById("ycut-doorplate-selected");
     if (!el) return;
+    el.closest(".ycut-hint")?.classList.toggle("is-on", STATE.doorplateSelectEnabled);
     if (!STATE.doorplateSelectEnabled) {
       el.textContent = "\uFF08\u672A\u555F\u7528\uFF09";
       return;
@@ -476,7 +477,7 @@
         <input id="ycut-area-max" type="number" placeholder="\u6700\u5927">
       </div>
       <div class="ycut-btn-grid ycut-grid-3">
-        <button id="ycut-doorplate-toggle">\u9580\u724C\u52FE\u9078\uFF1A\u95DC</button>
+        <button id="ycut-doorplate-toggle"${STATE.doorplateSelectEnabled ? ' class="is-on"' : ""}>\u9580\u724C\u52FE\u9078\uFF1A${STATE.doorplateSelectEnabled ? "\u958B" : "\u95DC"}</button>
         <button id="ycut-doorplate-all">\u5168\u9078</button>
         <button id="ycut-doorplate-none">\u5168\u4E0D\u9078</button>
       </div>
@@ -542,7 +543,9 @@
     });
     panel.querySelector("#ycut-doorplate-toggle").addEventListener("click", () => {
       STATE.doorplateSelectEnabled = !STATE.doorplateSelectEnabled;
-      panel.querySelector("#ycut-doorplate-toggle").textContent = `\u9580\u724C\u52FE\u9078\uFF1A${STATE.doorplateSelectEnabled ? "\u958B" : "\u95DC"}`;
+      const button = panel.querySelector("#ycut-doorplate-toggle");
+      button.textContent = `\u9580\u724C\u52FE\u9078\uFF1A${STATE.doorplateSelectEnabled ? "\u958B" : "\u95DC"}`;
+      button.classList.toggle("is-on", STATE.doorplateSelectEnabled);
       onDoorplateToggle(STATE.doorplateSelectEnabled);
     });
     panel.querySelector("#ycut-doorplate-all").addEventListener("click", () => {
