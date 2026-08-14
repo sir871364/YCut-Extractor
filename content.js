@@ -492,7 +492,7 @@
       <div class="ycut-btn-grid ycut-grid-3">
         <button id="ycut-scan">\u91CD\u65B0\u6383\u63CF</button>
         <button id="ycut-highlight">\u5207\u63DB\u9AD8\u4EAE</button>
-        <button id="ycut-auto-follow">\u8DDF\u96A8\uFF1A\u958B</button>
+        <button id="ycut-auto-follow"${STATE.autoFollow ? "" : ' class="is-off"'}>\u8DDF\u96A8\uFF1A${STATE.autoFollow ? "\u958B" : "\u95DC"}</button>
       </div>
     </div>
 
@@ -522,7 +522,9 @@
     panel.querySelector("#ycut-highlight").addEventListener("click", onHighlight);
     panel.querySelector("#ycut-auto-follow").addEventListener("click", () => {
       STATE.autoFollow = !STATE.autoFollow;
-      panel.querySelector("#ycut-auto-follow").textContent = `\u8DDF\u96A8\uFF1A${STATE.autoFollow ? "\u958B" : "\u95DC"}`;
+      const button = panel.querySelector("#ycut-auto-follow");
+      button.textContent = `\u8DDF\u96A8\uFF1A${STATE.autoFollow ? "\u958B" : "\u95DC"}`;
+      button.classList.toggle("is-off", !STATE.autoFollow);
       onAutoFollow?.(STATE.autoFollow);
     });
     panel.querySelector("#ycut-export-json").addEventListener("click", onExport);

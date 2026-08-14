@@ -188,6 +188,17 @@ td.ycut-extract-failed {
   background: #7f1d1d;
   border-color: #b91c1c;
 }
+/* 切換類按鈕的「關閉」狀態：預設開，關掉才需要一眼看見 */
+#ycut-blue-user-panel button.is-off {
+  background: #3f1d1d;
+  border-color: #b91c1c;
+  color: #fca5a5;
+  font-weight: 700;
+}
+#ycut-blue-user-panel button.is-off:hover:not(:disabled) {
+  background: #7f1d1d;
+  border-color: #ef4444;
+}
 #ycut-blue-user-panel button.is-ghost {
   background: transparent;
   border-color: transparent;

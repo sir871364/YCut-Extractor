@@ -305,7 +305,7 @@ export function mountPanel({
       <div class="ycut-btn-grid ycut-grid-3">
         <button id="ycut-scan">重新掃描</button>
         <button id="ycut-highlight">切換高亮</button>
-        <button id="ycut-auto-follow">跟隨：開</button>
+        <button id="ycut-auto-follow"${STATE.autoFollow ? "" : ' class="is-off"'}>跟隨：${STATE.autoFollow ? "開" : "關"}</button>
       </div>
     </div>
 
@@ -337,8 +337,10 @@ export function mountPanel({
   panel.querySelector("#ycut-highlight").addEventListener("click", onHighlight);
   panel.querySelector("#ycut-auto-follow").addEventListener("click", () => {
     STATE.autoFollow = !STATE.autoFollow;
-    panel.querySelector("#ycut-auto-follow").textContent =
-      `跟隨：${STATE.autoFollow ? "開" : "關"}`;
+    const button = panel.querySelector("#ycut-auto-follow");
+    button.textContent = `跟隨：${STATE.autoFollow ? "開" : "關"}`;
+    // 只有「關」需要視覺提示：預設是開，關掉才是需要被看見的非預設狀態
+    button.classList.toggle("is-off", !STATE.autoFollow);
     onAutoFollow?.(STATE.autoFollow);
   });
   panel.querySelector("#ycut-export-json").addEventListener("click", onExport);
