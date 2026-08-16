@@ -2,6 +2,7 @@ import { CONFIG, sleep, log } from "./config.js";
 import { STATE, anyExtractorRunning, legacyExtractorState } from "./state.js";
 import { waitForPageIdle } from "./utils.js";
 import { getAreaFromAnchor, getAreaFilterFromPanel, scan } from "./scanner.js";
+import { getDoorplateForCell } from "./doorplate.js";
 import { visibleModal, clickFirstOwnerAndWaitModal, closeCurrentModalIfAny, closeAfterExtraction } from "./interactions.js";
 import { isValidPdfHref, waitForValidPdfHref, extractPdfHrefFromModal, getPdfByApi, parseOwnerParams } from "./pdf.js";
 import { scanAllRoutePages, throwIfAborted } from "./route-scanner.js";
@@ -66,10 +67,10 @@ function buildCandidates() {
     if (area == null) return false;
     if (min != null && area < min) return false;
     if (max != null && area > max) return false;
-    if (STATE.doorplateSelectEnabled && STATE.selectedColIdx.size > 0) {
-      const td = a.closest("td");
-      const col = td ? td.cellIndex : null;
-      if (col == null || !STATE.selectedColIdx.has(col)) return false;
+    // 用門牌名稱比對，不能用欄位索引：跨路段／棟別時同一個索引會指向不同門牌
+    if (STATE.doorplateSelectEnabled && STATE.selectedDoorplates.size > 0) {
+      const doorplate = getDoorplateForCell(a.closest("td"));
+      if (!doorplate || !STATE.selectedDoorplates.has(doorplate)) return false;
     }
     return true;
   });

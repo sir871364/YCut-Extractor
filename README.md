@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Manifest-V3-blue">
-  <img src="https://img.shields.io/badge/Version-1.2.3-brightgreen">
+  <img src="https://img.shields.io/badge/Version-1.2.4-brightgreen">
   <img src="https://img.shields.io/badge/Chrome-Extension-orange">
 </p>
 

@@ -6,7 +6,9 @@ export const STATE = {
   extractStartedAt: 0,
   autoFollow: true,
   doorplateSelectEnabled: false,
-  selectedColIdx: new Set(),
+  // 篩選依據是門牌名稱而非欄位索引：換路段／棟別後表格會重建，
+  // 同一個欄位索引會對應到完全不同的門牌
+  selectedDoorplates: new Set(),
   colIdxToDoorplate: new Map()
 };
 

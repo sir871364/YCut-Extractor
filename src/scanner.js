@@ -33,9 +33,8 @@ export function scan() {
   if (STATE.doorplateSelectEnabled) injectDoorplateCheckboxes(true);
 }
 
-export function getAreaFromAnchor(anchor) {
+export function getAreaFromCell(td) {
   try {
-    const td = anchor.closest("td");
     if (!td) return null;
     const text = (td.textContent || "").replace(/,/g, "");
     const matches = text.match(/(\d+\.\d+|\d+)/g);
@@ -45,6 +44,10 @@ export function getAreaFromAnchor(anchor) {
   } catch {
     return null;
   }
+}
+
+export function getAreaFromAnchor(anchor) {
+  return getAreaFromCell(anchor?.closest?.("td"));
 }
 
 export function getAreaFilterFromPanel() {

@@ -1,6 +1,7 @@
 import { CONFIG, log, sleep } from "./config.js";
 import { STATE, anyExtractorRunning, databaseExtractorState } from "./state.js";
-import { scan } from "./scanner.js";
+import { getAreaFilterFromPanel, getAreaFromCell, scan } from "./scanner.js";
+import { getDoorplateForCell } from "./doorplate.js";
 import {
   detectRouteEmptyState,
   getRouteSelect,
@@ -25,23 +26,6 @@ import {
 } from "./export.js";
 import { setPanelWorking, setProgressMode, updateDatabaseProgress } from "./panel.js";
 
-function doorplateForCell(cell) {
-  const tables = [cell.closest("table"), document.querySelector("table#BuAddr")]
-    .filter((table, index, items) => table && items.indexOf(table) === index);
-  for (const table of tables) {
-    for (const row of Array.from(table.rows || [])) {
-      const header = row.cells?.[cell.cellIndex];
-      if (!header || header === cell) continue;
-      const text = (header.childNodes?.[0]?.textContent || header.textContent || "")
-        .replace(/^選\s*/, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (text.includes("號")) return text;
-    }
-  }
-  return "";
-}
-
 function floorForCell(cell) {
   const container = document.querySelector("#CommunityCase");
   let current = cell.closest("table");
@@ -60,6 +44,12 @@ function floorForCell(cell) {
 
 function collectCurrentRouteHouseholds(route, routeNumber) {
   const units = [];
+  // 面板上的建坪與門牌勾選，兩種掃描都該遵守（原本只有「擷取PDF→JSON」有套用）
+  const { min, max } = getAreaFilterFromPanel();
+  const areaFilterActive = min != null || max != null;
+  const doorplateFilterActive = STATE.doorplateSelectEnabled && STATE.selectedDoorplates.size > 0;
+  let filteredOut = 0;
+
   const cells = document.querySelectorAll("#CommunityCase td");
   for (const cell of cells) {
     const links = Array.from(cell.querySelectorAll("ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"));
@@ -68,8 +58,21 @@ function collectCurrentRouteHouseholds(route, routeNumber) {
     const selected = selectLatestOwnerParams(candidates);
     if (!selected) continue;
 
+    const doorplate = getDoorplateForCell(cell);
+    if (doorplateFilterActive && (!doorplate || !STATE.selectedDoorplates.has(doorplate))) {
+      filteredOut++;
+      continue;
+    }
+    if (areaFilterActive) {
+      const area = getAreaFromCell(cell);
+      // 建坪讀不到就無法確認是否落在範圍內，有設篩選時一律排除
+      if (area == null || (min != null && area < min) || (max != null && area > max)) {
+        filteredOut++;
+        continue;
+      }
+    }
+
     const routeLabel = route.displayLabel || route.label;
-    const doorplate = doorplateForCell(cell);
     const floor = floorForCell(cell);
     const householdLabel = [doorplate, floor].filter(Boolean).join(" ")
       || (cell.textContent || "").replace(/\s+/g, " ").trim()
@@ -92,7 +95,7 @@ function collectCurrentRouteHouseholds(route, routeNumber) {
       usedDateFallback: selected.usedDateFallback
     });
   }
-  return units;
+  return { units, filteredOut };
 }
 
 function getCurrentHouseholdRows() {
@@ -309,7 +312,8 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
     apiRetries: 0,
     apiFailed: 0,
     validPdf: 0,
-    duplicateSkipped: 0
+    duplicateSkipped: 0,
+    filteredSkipped: 0
   };
   let completionText = "資料庫掃描未完成";
 
@@ -369,7 +373,9 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
           return { householdCount: 0, empty: true };
         }
         scan();
-        const currentUnits = collectCurrentRouteHouseholds(route, routeNumber);
+        const collected = collectCurrentRouteHouseholds(route, routeNumber);
+        const currentUnits = collected.units;
+        metrics.filteredSkipped += collected.filteredOut;
         const range = routeDoorplateRange(route.label);
         for (const unit of currentUnits) {
           const parsedDoorplate = doorplateNumber(unit.doorplate);
@@ -489,7 +495,8 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
       `API成功：${metrics.apiSuccess}`,
       `API失敗：${metrics.apiFailed}`,
       `有效PDF：${metrics.validPdf}`,
-      `重複略過：${metrics.duplicateSkipped}`
+      `重複略過：${metrics.duplicateSkipped}`,
+      `篩選排除：${metrics.filteredSkipped}`
     ].join("\n");
     databaseProgress(metrics, { phase: "資料庫建立完成" });
   } catch (error) {

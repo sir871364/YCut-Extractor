@@ -8,7 +8,9 @@
     extractStartedAt: 0,
     autoFollow: true,
     doorplateSelectEnabled: false,
-    selectedColIdx: /* @__PURE__ */ new Set(),
+    // 篩選依據是門牌名稱而非欄位索引：換路段／棟別後表格會重建，
+    // 同一個欄位索引會對應到完全不同的門牌
+    selectedDoorplates: /* @__PURE__ */ new Set(),
     colIdxToDoorplate: /* @__PURE__ */ new Map()
   };
   var legacyExtractorState = {
@@ -144,12 +146,28 @@
   function getBuAddrTable() {
     return document.querySelector("table#BuAddr");
   }
+  function headerDoorplateText(th) {
+    return (th?.childNodes?.[0]?.textContent || th?.textContent || "").replace(/^選\s*/, "").replace(/\s+/g, " ").trim();
+  }
+  function getDoorplateForCell(cell) {
+    if (!cell) return "";
+    const tables = [cell.closest("table"), getBuAddrTable()].filter((table, index, items) => table && items.indexOf(table) === index);
+    for (const table of tables) {
+      for (const row of Array.from(table.rows || [])) {
+        const header = row.cells?.[cell.cellIndex];
+        if (!header || header === cell) continue;
+        const text = headerDoorplateText(header);
+        if (text.includes("\u865F")) return text;
+      }
+    }
+    return "";
+  }
   function buildDoorplateMap() {
     STATE.colIdxToDoorplate.clear();
     const table = getBuAddrTable();
     if (!table) return;
     Array.from(table.querySelectorAll("thead tr th")).forEach((th, idx) => {
-      const text = (th.textContent || "").trim();
+      const text = headerDoorplateText(th);
       if (text) STATE.colIdxToDoorplate.set(idx, text);
     });
   }
@@ -161,13 +179,18 @@
     buildDoorplateMap();
     ths.forEach((th, idx) => {
       const existed = th.querySelector("input.ycut-doorplate-cb");
+      const name = STATE.colIdxToDoorplate.get(idx) || "";
+      const selected = !!name && STATE.selectedDoorplates.has(name);
       if (!enable) {
         if (existed) existed.closest("label")?.remove();
         th.style.position = "";
         th.style.paddingTop = "";
         return;
       }
-      if (existed) return;
+      if (existed) {
+        existed.checked = selected;
+        return;
+      }
       th.style.position = "relative";
       th.style.paddingTop = "18px";
       const label = document.createElement("label");
@@ -185,11 +208,15 @@
       cb.type = "checkbox";
       cb.className = "ycut-doorplate-cb";
       cb.dataset.colIndex = String(idx);
-      cb.checked = STATE.selectedColIdx.has(idx);
+      cb.dataset.doorplate = name;
+      cb.checked = selected;
       cb.addEventListener("change", () => {
-        const col = Number(cb.dataset.colIndex);
-        if (cb.checked) STATE.selectedColIdx.add(col);
-        else STATE.selectedColIdx.delete(col);
+        const doorplate = cb.dataset.doorplate || "";
+        if (cb.checked) {
+          if (doorplate) STATE.selectedDoorplates.add(doorplate);
+        } else if (doorplate) {
+          STATE.selectedDoorplates.delete(doorplate);
+        }
         updateSelectedDoorplateText();
       });
       const mini = document.createElement("span");
@@ -202,15 +229,16 @@
   function setAllDoorplateCheckboxes(checked) {
     const table = getBuAddrTable();
     if (!table) return;
-    STATE.selectedColIdx.clear();
     Array.from(table.querySelectorAll("input.ycut-doorplate-cb")).forEach((cb) => {
       cb.checked = checked;
-      if (checked) STATE.selectedColIdx.add(Number(cb.dataset.colIndex));
+      const doorplate = cb.dataset.doorplate || "";
+      if (checked) {
+        if (doorplate) STATE.selectedDoorplates.add(doorplate);
+      } else if (doorplate) {
+        STATE.selectedDoorplates.delete(doorplate);
+      }
     });
     updateSelectedDoorplateText();
-  }
-  function getDoorplateByColIndex(colIdx) {
-    return STATE.colIdxToDoorplate.get(colIdx) || `col_${colIdx}`;
   }
   function updateSelectedDoorplateText() {
     const el = document.getElementById("ycut-doorplate-selected");
@@ -220,12 +248,11 @@
       el.textContent = "\uFF08\u672A\u555F\u7528\uFF09";
       return;
     }
-    if (STATE.selectedColIdx.size === 0) {
+    if (STATE.selectedDoorplates.size === 0) {
       el.textContent = "\uFF08\u672A\u52FE\u9078\uFF1D\u5168\u90E8\u9580\u724C\uFF09";
       return;
     }
-    const names = Array.from(STATE.selectedColIdx).sort((a, b) => a - b).map(getDoorplateByColIndex);
-    el.textContent = names.join("\u3001");
+    el.textContent = Array.from(STATE.selectedDoorplates).sort().join("\u3001");
   }
 
   // src/panel.js
@@ -589,9 +616,8 @@
     if (STATE.highlighted) applyHighlight(true);
     if (STATE.doorplateSelectEnabled) injectDoorplateCheckboxes(true);
   }
-  function getAreaFromAnchor(anchor) {
+  function getAreaFromCell(td) {
     try {
-      const td = anchor.closest("td");
       if (!td) return null;
       const text = (td.textContent || "").replace(/,/g, "");
       const matches = text.match(/(\d+\.\d+|\d+)/g);
@@ -601,6 +627,9 @@
     } catch {
       return null;
     }
+  }
+  function getAreaFromAnchor(anchor) {
+    return getAreaFromCell(anchor?.closest?.("td"));
   }
   function getAreaFilterFromPanel() {
     const minEl = document.getElementById("ycut-area-min");
@@ -1606,10 +1635,9 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       if (area == null) return false;
       if (min != null && area < min) return false;
       if (max != null && area > max) return false;
-      if (STATE.doorplateSelectEnabled && STATE.selectedColIdx.size > 0) {
-        const td = a.closest("td");
-        const col = td ? td.cellIndex : null;
-        if (col == null || !STATE.selectedColIdx.has(col)) return false;
+      if (STATE.doorplateSelectEnabled && STATE.selectedDoorplates.size > 0) {
+        const doorplate = getDoorplateForCell(a.closest("td"));
+        if (!doorplate || !STATE.selectedDoorplates.has(doorplate)) return false;
       }
       return true;
     });
@@ -2025,18 +2053,6 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
   }
 
   // src/database-scanner.js
-  function doorplateForCell(cell) {
-    const tables = [cell.closest("table"), document.querySelector("table#BuAddr")].filter((table, index, items) => table && items.indexOf(table) === index);
-    for (const table of tables) {
-      for (const row of Array.from(table.rows || [])) {
-        const header = row.cells?.[cell.cellIndex];
-        if (!header || header === cell) continue;
-        const text = (header.childNodes?.[0]?.textContent || header.textContent || "").replace(/^選\s*/, "").replace(/\s+/g, " ").trim();
-        if (text.includes("\u865F")) return text;
-      }
-    }
-    return "";
-  }
   function floorForCell(cell) {
     const container = document.querySelector("#CommunityCase");
     let current = cell.closest("table");
@@ -2054,6 +2070,10 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
   }
   function collectCurrentRouteHouseholds(route, routeNumber) {
     const units = [];
+    const { min, max } = getAreaFilterFromPanel();
+    const areaFilterActive = min != null || max != null;
+    const doorplateFilterActive = STATE.doorplateSelectEnabled && STATE.selectedDoorplates.size > 0;
+    let filteredOut = 0;
     const cells = document.querySelectorAll("#CommunityCase td");
     for (const cell of cells) {
       const links = Array.from(cell.querySelectorAll("ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"));
@@ -2061,8 +2081,19 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       const candidates = links.map(parseOwnerLinkParams).filter(Boolean);
       const selected = selectLatestOwnerParams(candidates);
       if (!selected) continue;
+      const doorplate = getDoorplateForCell(cell);
+      if (doorplateFilterActive && (!doorplate || !STATE.selectedDoorplates.has(doorplate))) {
+        filteredOut++;
+        continue;
+      }
+      if (areaFilterActive) {
+        const area = getAreaFromCell(cell);
+        if (area == null || min != null && area < min || max != null && area > max) {
+          filteredOut++;
+          continue;
+        }
+      }
       const routeLabel = route.displayLabel || route.label;
-      const doorplate = doorplateForCell(cell);
       const floor = floorForCell(cell);
       const householdLabel = [doorplate, floor].filter(Boolean).join(" ") || (cell.textContent || "").replace(/\s+/g, " ").trim() || `${routeLabel} \u6236\u5225`;
       const householdKey = candidates.map((item) => `${item.etrIdx}:${item.ownerIdx}`).sort().join("|");
@@ -2079,7 +2110,7 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         usedDateFallback: selected.usedDateFallback
       });
     }
-    return units;
+    return { units, filteredOut };
   }
   function getCurrentHouseholdRows() {
     return Array.from(document.querySelectorAll("#CommunityCase td")).filter((cell) => cell.querySelector("ul.dropdown-menu li a[onclick*='checkAndShowCommunityOwnerAddr']"));
@@ -2262,7 +2293,8 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       apiRetries: 0,
       apiFailed: 0,
       validPdf: 0,
-      duplicateSkipped: 0
+      duplicateSkipped: 0,
+      filteredSkipped: 0
     };
     let completionText = "\u8CC7\u6599\u5EAB\u6383\u63CF\u672A\u5B8C\u6210";
     databaseExtractorState.running = true;
@@ -2318,7 +2350,9 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
             return { householdCount: 0, empty: true };
           }
           scan();
-          const currentUnits = collectCurrentRouteHouseholds(route, routeNumber);
+          const collected = collectCurrentRouteHouseholds(route, routeNumber);
+          const currentUnits = collected.units;
+          metrics.filteredSkipped += collected.filteredOut;
           const range = routeDoorplateRange(route.label);
           for (const unit of currentUnits) {
             const parsedDoorplate = doorplateNumber(unit.doorplate);
@@ -2430,7 +2464,8 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         `API\u6210\u529F\uFF1A${metrics.apiSuccess}`,
         `API\u5931\u6557\uFF1A${metrics.apiFailed}`,
         `\u6709\u6548PDF\uFF1A${metrics.validPdf}`,
-        `\u91CD\u8907\u7565\u904E\uFF1A${metrics.duplicateSkipped}`
+        `\u91CD\u8907\u7565\u904E\uFF1A${metrics.duplicateSkipped}`,
+        `\u7BE9\u9078\u6392\u9664\uFF1A${metrics.filteredSkipped}`
       ].join("\n");
       databaseProgress(metrics, { phase: "\u8CC7\u6599\u5EAB\u5EFA\u7ACB\u5B8C\u6210" });
     } catch (error) {
