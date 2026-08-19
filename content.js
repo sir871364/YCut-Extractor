@@ -421,7 +421,19 @@
     document.querySelectorAll(".ycut-extract-active,.ycut-extract-done,.ycut-extract-failed").forEach((el) => el.classList.remove("ycut-extract-active", "ycut-extract-done", "ycut-extract-failed"));
   }
   var SCAN_ALL_GROUPS_KEY = "ycut_scan_all_groups";
-  var HIDE_DATABASE_BUTTON = true;
+  var ADVANCED_HIDDEN_BY_DEFAULT = true;
+  function setAdvancedActionsVisible(visible) {
+    const panel = document.getElementById("ycut-blue-user-panel");
+    if (!panel) return;
+    ["ycut-build-database", "ycut-export-failures"].forEach((id) => {
+      const button = panel.querySelector(`#${id}`);
+      if (button) button.hidden = !visible;
+    });
+    panel.querySelectorAll(".ycut-run-grid").forEach((grid) => {
+      grid.classList.toggle("ycut-grid-1", !visible);
+    });
+    panel.dataset.advanced = visible ? "on" : "off";
+  }
   function getRunningVersion() {
     try {
       const version = chrome.runtime?.getManifest?.()?.version;
@@ -527,13 +539,13 @@
 
     <div class="ycut-section">
       <div class="ycut-section-title">\u57F7\u884C</div>
-      <div class="ycut-btn-grid${HIDE_DATABASE_BUTTON ? " ycut-grid-1" : ""}">
+      <div class="ycut-btn-grid ycut-run-grid${ADVANCED_HIDDEN_BY_DEFAULT ? " ycut-grid-1" : ""}">
         <button id="ycut-export-json" class="is-primary">\u64F7\u53D6PDF\u2192JSON</button>
-        <button id="ycut-build-database" class="is-primary"${HIDE_DATABASE_BUTTON ? " hidden" : ""}>\u5EFA\u7ACBPDF\u8CC7\u6599\u5EAB</button>
+        <button id="ycut-build-database" class="is-primary"${ADVANCED_HIDDEN_BY_DEFAULT ? " hidden" : ""}>\u5EFA\u7ACBPDF\u8CC7\u6599\u5EAB</button>
       </div>
-      <div class="ycut-btn-grid">
+      <div class="ycut-btn-grid ycut-run-grid${ADVANCED_HIDDEN_BY_DEFAULT ? " ycut-grid-1" : ""}">
         <button id="ycut-cancel-scan" class="is-danger" disabled>\u53D6\u6D88\u6383\u63CF</button>
-        <button id="ycut-export-failures" disabled>\u532F\u51FA\u5931\u6557\u6E05\u55AE</button>
+        <button id="ycut-export-failures" disabled${ADVANCED_HIDDEN_BY_DEFAULT ? " hidden" : ""}>\u532F\u51FA\u5931\u6557\u6E05\u55AE</button>
       </div>
     </div>
 
@@ -558,13 +570,13 @@
     });
     panel.querySelector("#ycut-export-json").addEventListener("click", onExport);
     panel.querySelector("#ycut-build-database").addEventListener("click", onBuildDatabase);
+    panel.dataset.advanced = ADVANCED_HIDDEN_BY_DEFAULT ? "off" : "on";
     panel.querySelector("h4").addEventListener("click", (event) => {
       if (!event.ctrlKey || !event.shiftKey || event.button !== 0) return;
       event.preventDefault();
-      const databaseButton = panel.querySelector("#ycut-build-database");
-      if (databaseButton?.disabled) return;
-      setPanelStatus("\u555F\u52D5 PDF \u8CC7\u6599\u5EAB\u6383\u63CF\u2026");
-      onBuildDatabase?.();
+      const nowVisible = panel.dataset.advanced !== "on";
+      setAdvancedActionsVisible(nowVisible);
+      setPanelStatus(nowVisible ? "\u5DF2\u986F\u793A\u9032\u968E\u529F\u80FD" : "\u5DF2\u96B1\u85CF\u9032\u968E\u529F\u80FD");
     });
     panel.querySelector("#ycut-cancel-scan").addEventListener("click", () => onCancelScan?.());
     panel.querySelector("#ycut-export-failures").addEventListener("click", onExportFailures);

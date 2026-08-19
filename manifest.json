@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YCUT Blue User Scanner",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "精準掃描 YCUT 社區頁面的藍色可點小人並可視覺化標示。",
   "action": {
     "default_title": "YCUT Blue User Scanner",

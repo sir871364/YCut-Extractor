@@ -193,10 +193,25 @@ export function clearExtractionStates() {
 
 const SCAN_ALL_GROUPS_KEY = "ycut_scan_all_groups";
 
-// 「建立PDF資料庫」改成隱藏入口：Ctrl + Shift + 左鍵點面板標題觸發。
-// 按鈕本身保留在 DOM 裡（只是 hidden），這樣「掃描中禁用」等狀態管理完全不用改動。
-// 想改回一般按鈕就把這個改成 false。
-const HIDE_DATABASE_BUTTON = true;
+// 進階功能（建立PDF資料庫、匯出失敗清單）預設藏起來，
+// 用 Ctrl + Shift + 左鍵點面板標題切換顯示／隱藏。
+// 按鈕本身一直留在 DOM 裡（只是 hidden），這樣「掃描中禁用」等狀態管理完全不用改動。
+// 想讓它們一開始就顯示，把這個改成 false。
+const ADVANCED_HIDDEN_BY_DEFAULT = true;
+
+/** 切換進階按鈕的顯示；隱藏時該列改為單欄，剩下的按鈕撐滿不留空格 */
+function setAdvancedActionsVisible(visible) {
+  const panel = document.getElementById("ycut-blue-user-panel");
+  if (!panel) return;
+  ["ycut-build-database", "ycut-export-failures"].forEach((id) => {
+    const button = panel.querySelector(`#${id}`);
+    if (button) button.hidden = !visible;
+  });
+  panel.querySelectorAll(".ycut-run-grid").forEach((grid) => {
+    grid.classList.toggle("ycut-grid-1", !visible);
+  });
+  panel.dataset.advanced = visible ? "on" : "off";
+}
 
 /**
  * 面板顯示的是「這一頁正在跑的 content script」屬於哪一版。
@@ -316,13 +331,13 @@ export function mountPanel({
 
     <div class="ycut-section">
       <div class="ycut-section-title">執行</div>
-      <div class="ycut-btn-grid${HIDE_DATABASE_BUTTON ? " ycut-grid-1" : ""}">
+      <div class="ycut-btn-grid ycut-run-grid${ADVANCED_HIDDEN_BY_DEFAULT ? " ycut-grid-1" : ""}">
         <button id="ycut-export-json" class="is-primary">擷取PDF→JSON</button>
-        <button id="ycut-build-database" class="is-primary"${HIDE_DATABASE_BUTTON ? " hidden" : ""}>建立PDF資料庫</button>
+        <button id="ycut-build-database" class="is-primary"${ADVANCED_HIDDEN_BY_DEFAULT ? " hidden" : ""}>建立PDF資料庫</button>
       </div>
-      <div class="ycut-btn-grid">
+      <div class="ycut-btn-grid ycut-run-grid${ADVANCED_HIDDEN_BY_DEFAULT ? " ycut-grid-1" : ""}">
         <button id="ycut-cancel-scan" class="is-danger" disabled>取消掃描</button>
-        <button id="ycut-export-failures" disabled>匯出失敗清單</button>
+        <button id="ycut-export-failures" disabled${ADVANCED_HIDDEN_BY_DEFAULT ? " hidden" : ""}>匯出失敗清單</button>
       </div>
     </div>
 
@@ -351,14 +366,14 @@ export function mountPanel({
   panel.querySelector("#ycut-export-json").addEventListener("click", onExport);
   panel.querySelector("#ycut-build-database").addEventListener("click", onBuildDatabase);
 
-  // 隱藏入口：Ctrl + Shift + 左鍵點面板標題
+  // 隱藏入口：Ctrl + Shift + 左鍵點面板標題 → 切換進階功能的顯示
+  panel.dataset.advanced = ADVANCED_HIDDEN_BY_DEFAULT ? "off" : "on";
   panel.querySelector("h4").addEventListener("click", (event) => {
     if (!event.ctrlKey || !event.shiftKey || event.button !== 0) return;
     event.preventDefault();
-    const databaseButton = panel.querySelector("#ycut-build-database");
-    if (databaseButton?.disabled) return; // 已有掃描在跑，不重複觸發
-    setPanelStatus("啟動 PDF 資料庫掃描…");
-    onBuildDatabase?.();
+    const nowVisible = panel.dataset.advanced !== "on";
+    setAdvancedActionsVisible(nowVisible);
+    setPanelStatus(nowVisible ? "已顯示進階功能" : "已隱藏進階功能");
   });
   panel.querySelector("#ycut-cancel-scan").addEventListener("click", () => onCancelScan?.());
   panel.querySelector("#ycut-export-failures").addEventListener("click", onExportFailures);
