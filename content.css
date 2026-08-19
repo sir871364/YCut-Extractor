@@ -83,6 +83,7 @@ td.ycut-extract-failed {
 }
 #ycut-blue-user-panel h4 {
   margin: 0;
+  user-select: none;
   font-size: 14px;
   font-weight: 700;
 }
@@ -144,6 +145,9 @@ td.ycut-extract-failed {
 }
 #ycut-blue-user-panel .ycut-btn-grid.ycut-grid-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+#ycut-blue-user-panel .ycut-btn-grid.ycut-grid-1 {
+  grid-template-columns: 1fr;
 }
 
 #ycut-blue-user-panel button {
