@@ -25,6 +25,7 @@ import {
   getCommunityName
 } from "./export.js";
 import { setPanelWorking, setProgressMode, updateDatabaseProgress } from "./panel.js";
+import { startCoreAccessWatchdog } from "./license.js";
 
 function floorForCell(cell) {
   const container = document.querySelector("#CommunityCase");
@@ -316,6 +317,7 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
     filteredSkipped: 0
   };
   let completionText = "資料庫掃描未完成";
+  let blockedByLicense = null;
 
   databaseExtractorState.running = true;
   databaseExtractorState.cancelRequested = false;
@@ -327,6 +329,15 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
   setProgressMode("database");
   setPanelWorking(true, "正在收集所有路段戶別");
   databaseProgress(metrics, { phase: "收集戶別" });
+
+  // 與擷取路徑相同：中途被停用要當場中止，不能等這一輪跑完
+  const stopWatchdog = startCoreAccessWatchdog({
+    signal,
+    onBlocked: (status) => {
+      blockedByLicense = status;
+      controller.abort();
+    }
+  });
 
   try {
     const routeResult = await scanAllRoutePages({
@@ -501,7 +512,11 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
     databaseProgress(metrics, { phase: "資料庫建立完成" });
   } catch (error) {
     databaseExtractorState.lastFailures = failures;
-    if (error?.name === "AbortError" || signal.aborted) {
+    if (blockedByLicense) {
+      completionText = `${blockedByLicense.message || "授權狀態已變更"}
+中止前已處理戶別：${metrics.processedHouseholds} / ${metrics.totalHouseholds}`;
+      databaseProgress(metrics, { phase: "授權狀態已變更，已中止" });
+    } else if (error?.name === "AbortError" || signal.aborted) {
       completionText = `資料庫掃描已取消\n已處理戶別：${metrics.processedHouseholds} / ${metrics.totalHouseholds}`;
       databaseProgress(metrics, { phase: "已取消" });
     } else {
@@ -510,6 +525,7 @@ export async function buildPdfDatabase({ includeGroups = true } = {}) {
       databaseProgress(metrics, { phase: "掃描中止" });
     }
   } finally {
+    stopWatchdog();
     controller.abort();
     databaseExtractorState.abortController = null;
     databaseExtractorState.running = false;

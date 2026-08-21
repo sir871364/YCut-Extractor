@@ -7,6 +7,7 @@ import { visibleModal, clickFirstOwnerAndWaitModal, closeCurrentModalIfAny, clos
 import { isValidPdfHref, waitForValidPdfHref, extractPdfHrefFromModal, getPdfByApi, parseOwnerParams } from "./pdf.js";
 import { scanAllRoutePages, throwIfAborted } from "./route-scanner.js";
 import { waitWithSignal } from "./owner-api.js";
+import { startCoreAccessWatchdog } from "./license.js";
 import { exportPdfResults, getCommunityName, normalizePdfUrls } from "./export.js";
 import {
   clearExtractionStates,
@@ -244,6 +245,7 @@ export async function scanAllRoutes(options = {}) {
   const seenHouseholds = new Set();
   let successfulRoutes = 0;
   let emptyRouteCount = 0;
+  let blockedByLicense = null;
   let routeCount = 0;
   let totalCandidates = 0;
   let completionText = "掃描未完成";
@@ -260,6 +262,16 @@ export async function scanAllRoutes(options = {}) {
   setCancelEnabled(true);
   setPanelWorking(true, "準備掃描所有路段分頁");
   updateRouteProgress();
+
+  // 開始前檢查一次不夠：這一輪可能跑數十分鐘，中途被停用必須當場中止
+  const stopWatchdog = startCoreAccessWatchdog({
+    signal,
+    onBlocked: (status) => {
+      blockedByLicense = status;
+      setPanelStatus(status.message || "授權狀態已變更，擷取中止");
+      controller.abort();
+    }
+  });
 
   try {
     const routeResult = await scanAllRoutePages({
@@ -400,8 +412,16 @@ export async function scanAllRoutes(options = {}) {
       failed: routeFailures.length
     });
   } catch (error) {
-    if (error?.name === "AbortError" || signal.aborted) {
-      // 取消時已經擷取到的 PDF 照樣匯出：每一戶都花了數秒，丟掉太浪費
+    if (blockedByLicense) {
+      // 被授權服務中止時不匯出：緊急停止的語意是「停下來」，不是把手上的資料倒出來
+      completionText = [
+        blockedByLicense.message || "授權狀態已變更，擷取中止",
+        `中止前已完成分頁：${successfulRoutes}`,
+        `已擷取但未匯出：${allUrls.length}`
+      ].join("\n");
+      updatePanelProgress(0, 0, { title: "已中止", stage: "授權狀態已變更" });
+    } else if (error?.name === "AbortError" || signal.aborted) {
+      // 使用者主動取消時，已擷取到的 PDF 照樣匯出：每一戶都花了數秒，丟掉太浪費
       const uniqueUrls = normalizePdfUrls(allUrls);
       const partialFailures = allItemFailures.map((failure) => ({
         stage: "PDF extraction",
@@ -423,6 +443,7 @@ export async function scanAllRoutes(options = {}) {
       log("全部路段掃描失敗", error);
     }
   } finally {
+    stopWatchdog();
     controller.abort();
     legacyExtractorState.abortController = null;
     legacyExtractorState.cancelRequested = false;

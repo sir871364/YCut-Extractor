@@ -1,56 +1,49 @@
 # Privacy Policy
 
-YCUT Blue User Scanner is designed to assist users in scanning, identifying, and exporting information from the YCUT website.
+YCUT Blue User Scanner assists users in scanning, identifying, and exporting information from the YCUT website.
 
-## Local Processing
+## YCUT Website Data and Local Processing
 
-The primary scanning and data-processing functions of the extension are performed locally within the user's browser.
+The extension's primary scanning, highlighting, data processing, PDF export, and JSON export functions run locally in the user's browser. YCUT website content processed by these functions is not sent to the license server.
 
-Website content scanned by the extension is not uploaded to the developer's servers as part of the scanning or export process.
+The extension communicates with YCUT website services as needed to retrieve information requested by the user. Those communications are separate from license verification and remain subject to the YCUT website's own handling of data.
 
-## License Verification
+## License Verification Data
 
-The extension uses an external license verification service to determine whether the current installation is authorized to use certain features.
-
-For license verification and authorization purposes, the extension may transmit the following information to the license service:
+The license server remains the authoritative source for authorization status. When requesting or checking a license, the extension may send or exchange the following information with the license server:
 
 * A randomly generated installation identifier (Install ID)
-* Product identifier
-* Google account identifier, when available
-* Google account email address, when available
-* License request and authorization status information
+* Product identifier (Product ID)
+* Google account identifier (`google_sub`), when available
+* Google email address, when available
+* License-request, license-status, expiration, and related authorization information
 
-This information is used only for license verification, authorization management, and prevention of unauthorized use.
+This information is used only for license identification, license management, and prevention of unauthorized use. Scanned YCUT website content is not included in license-verification requests.
 
-## Google Account Information
+License requests, license records, authorization status, identifiers, account details supplied for licensing, timestamps, expiration dates, and administrator notes may be stored in the license service's Cloudflare D1 database for the license lifecycle and related administration. License requests and license-administration records may also be shown to authorized administrators through the project's Telegram-based approval and management workflow. Telegram receives only the licensing information needed for that administrative workflow; scanned YCUT website content is not sent to Telegram.
 
-When permitted by the user and supported by the browser, the extension may access the user's Google account identifier and email address through the Chrome Identity API.
+## Google Identity Information
 
-This information is used only for license identification and authorization purposes and is not used for advertising or profiling.
+When the required Chrome permissions are granted and the browser provides account information, the extension may obtain the user's Google account identifier and email address through the Chrome Identity API.
 
-## Third-Party Services
+Google Identity information is used only to identify and manage licensing. It is not used for advertising, behavioral tracking, profiling, or unrelated analytics.
 
-The extension may communicate with external services required for its operation, including:
+## Authorization QR Codes
 
-* The YCUT license verification service
-* A third-party QR code generation service used to display authorization QR codes
+Authorization QR Codes are generated locally inside the extension from the approval URL supplied by the license workflow. The approval URL is not sent to a third-party QR Code generation service.
 
-When generating a QR code, the authorization URL encoded in the QR code may be transmitted to the QR code generation service.
+Scanning the QR Code opens the encoded approval destination as part of the existing authorization workflow.
 
-## Data Usage
+## Local Storage
 
-The extension does not sell personal information.
+The extension uses Chrome local storage for operational information such as the Install ID, cached license status and expiration information, Google account information used for licensing, and the user's acknowledgement of required notices. Existing local identifiers are reused so extension updates do not intentionally create a new Install ID.
 
-Information processed for license verification is not used for advertising, behavioral tracking, or unrelated analytics.
+## Data Use and Sharing
 
-## Website Data
+The extension does not sell user data. License-related information is not used for advertising, behavioral tracking, or unrelated analytics, and YCUT scanning content is not provided to the license server.
 
-Information scanned from the YCUT website is processed locally for the purpose of providing the extension's scanning, highlighting, PDF, JSON, or related export functionality.
-
-The extension does not intentionally transmit scanned YCUT website content to the license verification service.
+The license service is hosted on Cloudflare infrastructure. Like other hosted network services, Cloudflare may process routine request metadata, such as network and security information, under its own service practices. The license Worker does not intentionally read or write IP addresses, user-agent strings, device fingerprints, or location data into its D1 licensing tables.
 
 ## Changes to This Privacy Policy
 
-This Privacy Policy may be updated when the extension's functionality, permissions, or external services change.
-
-Users should review the latest version of this Privacy Policy when installing or updating the extension.
+This Privacy Policy may be updated when the extension's functionality, permissions, or data flows change. Users should review the latest version when installing or updating the extension.

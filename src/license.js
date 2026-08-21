@@ -1,8 +1,11 @@
 // Authorization logic — DO NOT MODIFY
 import { LICENSE_STATUS_API, PRODUCT_ID } from "./config.js";
 import { setPanelStatus } from "./panel.js";
+import { classifyCoreLicenseStatus } from "./core-access.js";
 
 const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
+const CORE_AUTH_TIMEOUT_MS = 8000;
+const CORE_WATCHDOG_INTERVAL_MS = 60000;
 let lastLicenseCheck = null;
 
 function taiwanDateString() {
@@ -71,11 +74,75 @@ export async function hasValidLicense() {
   }
 }
 
+/**
+ * 即時向授權服務查詢一次核心狀態。永遠不丟例外：
+ * 任何錯誤、逾時或格式異常都收斂成 unavailable，由呼叫端決定如何處置。
+ */
+export async function fetchCoreAccessDecision() {
+  const stored = await chrome.storage.local.get(["install_id"]);
+  if (!stored.install_id) {
+    return { decision: "unavailable", message: "目前無法確認授權狀態，請稍後再試。", result: null };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CORE_AUTH_TIMEOUT_MS);
+  try {
+    const statusUrl = `${LICENSE_STATUS_API}?product_id=${encodeURIComponent(PRODUCT_ID)}&install_id=${encodeURIComponent(stored.install_id)}`;
+    const response = await fetch(statusUrl, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) throw new Error("License status request failed");
+    const result = await response.json();
+    const status = classifyCoreLicenseStatus(result);
+    if (status.decision === "unavailable") throw new Error("Invalid license status response");
+    return { ...status, result };
+  } catch {
+    return { decision: "unavailable", message: "目前無法確認授權狀態，請稍後再試。", result: null };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * 掃描期間的持續監控：只在開始前檢查一次是不夠的，
+ * 一輪擷取可能跑數十分鐘，管理員中途按下停止必須當場生效。
+ * 依設定，只要不是 licensed（含查不到狀態）就立即中止。
+ */
+export function startCoreAccessWatchdog({ onBlocked, intervalMs = CORE_WATCHDOG_INTERVAL_MS, signal } = {}) {
+  let finished = false;
+  const stop = () => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    signal?.removeEventListener("abort", stop);
+  };
+  const timer = setInterval(async () => {
+    if (finished || signal?.aborted) return;
+    const status = await fetchCoreAccessDecision();
+    if (finished || signal?.aborted) return;
+    if (status.decision === "licensed") return;
+    stop();
+    onBlocked?.(status);
+  }, intervalMs);
+  signal?.addEventListener("abort", stop, { once: true });
+  return stop;
+}
+
 export async function requireLicenseForPremiumAction() {
-  const ok = await hasValidLicense();
-  if (ok) return true;
-  if (lastLicenseCheck?.reason === "expired") {
-    const expiresOn = lastLicenseCheck.expires_on || "設定期限";
+  const status = await fetchCoreAccessDecision();
+  if (status.decision === "unavailable") {
+    alert("目前無法確認授權狀態，請稍後再試。");
+    setPanelStatus("無法即時確認授權狀態，PDF / JSON 下載已暫停");
+    return false;
+  }
+  const result = status.result;
+  if (status.decision === "suspended") {
+    alert(status.message);
+    setPanelStatus("系統管理員已暫停 PDF / JSON 擷取功能");
+    return false;
+  }
+
+  if (status.decision === "licensed") return true;
+  if (result.reason === "expired") {
+    const expiresOn = result.expires_on || "設定期限";
     alert(`授權已於 ${expiresOn} 到期。\n\n請打開擴充工具 popup，重新產生 QR Code 並請管理員核准。`);
     setPanelStatus(`授權已於 ${expiresOn} 到期，PDF / JSON 下載已鎖定`);
     return false;

@@ -67,7 +67,11 @@ function mountPanelWithHandlers() {
       if (databaseExtractorState.running) cancelDatabaseScan();
       if (legacyExtractorState.running) cancelLegacyScan();
     },
-    onExportFailures: () => exportLastDatabaseFailures()
+    onExportFailures: async () => {
+      // 匯出失敗清單也是一種將資料寫出檔案的動作，同樣受停用控制
+      if (!(await requireLicenseForPremiumAction())) return;
+      exportLastDatabaseFailures();
+    }
   });
 }
 

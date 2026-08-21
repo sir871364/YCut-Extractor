@@ -46,7 +46,9 @@
     OWNER_API_RETRY_DELAYS_MS: [800, 1500],
     DATABASE_API_GAP_MS: 100
   };
-  var LICENSE_STATUS_API = "https://ycut-license-api.sir8713642.workers.dev/api/license-status";
+  var LICENSE_API_BASE_URL = "https://ycut-license-api.sir8713642.workers.dev";
+  var LICENSE_REQUEST_API = `${LICENSE_API_BASE_URL}/api/request-license`;
+  var LICENSE_STATUS_API = `${LICENSE_API_BASE_URL}/api/license-status`;
   var PRODUCT_ID = "ycut_extractor";
   var COMM_GATEWAY_URL = "https://is.ycut.com.tw/magent/ashx/CommGateway.ashx";
   var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1529,6 +1531,150 @@
     return `${record.Etr_idx}|${record.Owner_idx}|${record["PDF URL"] || ""}`;
   }
 
+  // src/core-access.js
+  function classifyCoreLicenseStatus(data) {
+    if (!data?.success || typeof data.global_suspended !== "boolean" || typeof data.product_suspended !== "boolean") {
+      return { decision: "unavailable", message: "\u76EE\u524D\u7121\u6CD5\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002" };
+    }
+    if (data.global_suspended) {
+      return { decision: "suspended", message: "\u7CFB\u7D71\u76EE\u524D\u8655\u65BC\u7DCA\u6025\u505C\u6B62\u72C0\u614B\u3002\n\n\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002" };
+    }
+    if (data.product_suspended) {
+      return { decision: "suspended", message: "\u76EE\u524D\u6B64\u5DE5\u5177\u5DF2\u7531\u7CFB\u7D71\u7BA1\u7406\u54E1\u66AB\u6642\u505C\u6B62\u4F7F\u7528\u3002\n\n\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002" };
+    }
+    if (data.active === true) {
+      return { decision: "licensed", message: "\u6388\u6B0A\u6709\u6548\u3002" };
+    }
+    return { decision: "unlicensed", message: "" };
+  }
+
+  // src/license.js
+  var LICENSE_CACHE_TTL_MS = 30 * 60 * 1e3;
+  var CORE_AUTH_TIMEOUT_MS = 8e3;
+  var CORE_WATCHDOG_INTERVAL_MS = 6e4;
+  var lastLicenseCheck = null;
+  function taiwanDateString() {
+    return new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
+  }
+  function isExpiredLicenseDate(expiresOn) {
+    return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || "")) || taiwanDateString() > expiresOn;
+  }
+  async function hasFreshLicenseCache(installId) {
+    const stored = await chrome.storage.local.get([
+      "license_status",
+      "qr_licensed_install_id",
+      "last_verified_at",
+      "license_expires_on"
+    ]);
+    if (stored.license_status !== "valid" || stored.qr_licensed_install_id !== installId) {
+      return false;
+    }
+    if (isExpiredLicenseDate(stored.license_expires_on)) {
+      lastLicenseCheck = { reason: "expired", expires_on: stored.license_expires_on || null };
+      await chrome.storage.local.set({ license_status: "invalid" });
+      return false;
+    }
+    const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
+    return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  }
+  async function hasValidLicense() {
+    try {
+      const stored = await chrome.storage.local.get(["install_id"]);
+      if (!stored.install_id) return false;
+      if (await hasFreshLicenseCache(stored.install_id)) {
+        return true;
+      }
+      const statusUrl = `${LICENSE_STATUS_API}?product_id=${encodeURIComponent(PRODUCT_ID)}&install_id=${encodeURIComponent(stored.install_id)}`;
+      const res = await fetch(statusUrl);
+      const result = await res.json();
+      if (result && result.success && result.active) {
+        lastLicenseCheck = result;
+        await chrome.storage.local.set({
+          license_status: "valid",
+          qr_licensed_install_id: stored.install_id,
+          last_verified_at: (/* @__PURE__ */ new Date()).toISOString(),
+          license_expires_on: result.expires_on
+        });
+        return true;
+      }
+      lastLicenseCheck = result;
+      await chrome.storage.local.set({
+        license_status: "invalid",
+        license_expires_on: result?.expires_on || null
+      });
+      return false;
+    } catch {
+      const stored = await chrome.storage.local.get(["install_id"]);
+      return !!stored.install_id && await hasFreshLicenseCache(stored.install_id);
+    }
+  }
+  async function fetchCoreAccessDecision() {
+    const stored = await chrome.storage.local.get(["install_id"]);
+    if (!stored.install_id) {
+      return { decision: "unavailable", message: "\u76EE\u524D\u7121\u6CD5\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002", result: null };
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CORE_AUTH_TIMEOUT_MS);
+    try {
+      const statusUrl = `${LICENSE_STATUS_API}?product_id=${encodeURIComponent(PRODUCT_ID)}&install_id=${encodeURIComponent(stored.install_id)}`;
+      const response = await fetch(statusUrl, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("License status request failed");
+      const result = await response.json();
+      const status = classifyCoreLicenseStatus(result);
+      if (status.decision === "unavailable") throw new Error("Invalid license status response");
+      return { ...status, result };
+    } catch {
+      return { decision: "unavailable", message: "\u76EE\u524D\u7121\u6CD5\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002", result: null };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+  function startCoreAccessWatchdog({ onBlocked, intervalMs = CORE_WATCHDOG_INTERVAL_MS, signal } = {}) {
+    let finished = false;
+    const stop = () => {
+      if (finished) return;
+      finished = true;
+      clearInterval(timer);
+      signal?.removeEventListener("abort", stop);
+    };
+    const timer = setInterval(async () => {
+      if (finished || signal?.aborted) return;
+      const status = await fetchCoreAccessDecision();
+      if (finished || signal?.aborted) return;
+      if (status.decision === "licensed") return;
+      stop();
+      onBlocked?.(status);
+    }, intervalMs);
+    signal?.addEventListener("abort", stop, { once: true });
+    return stop;
+  }
+  async function requireLicenseForPremiumAction() {
+    const status = await fetchCoreAccessDecision();
+    if (status.decision === "unavailable") {
+      alert("\u76EE\u524D\u7121\u6CD5\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002");
+      setPanelStatus("\u7121\u6CD5\u5373\u6642\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u66AB\u505C");
+      return false;
+    }
+    const result = status.result;
+    if (status.decision === "suspended") {
+      alert(status.message);
+      setPanelStatus("\u7CFB\u7D71\u7BA1\u7406\u54E1\u5DF2\u66AB\u505C PDF / JSON \u64F7\u53D6\u529F\u80FD");
+      return false;
+    }
+    if (status.decision === "licensed") return true;
+    if (result.reason === "expired") {
+      const expiresOn = result.expires_on || "\u8A2D\u5B9A\u671F\u9650";
+      alert(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\u3002
+
+\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u91CD\u65B0\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002`);
+      setPanelStatus(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A`);
+      return false;
+    }
+    alert("\u6B64\u529F\u80FD\u9700\u8981 QR \u6388\u6B0A\u5F8C\u624D\u80FD\u4F7F\u7528\u3002\n\n\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002");
+    setPanelStatus("\u5C1A\u672A QR \u6388\u6B0A\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A");
+    return false;
+  }
+
   // src/export.js
   function downloadBlob(content, mimeType, filename) {
     const blob = new Blob([content], { type: mimeType });
@@ -1811,6 +1957,7 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
     const seenHouseholds = /* @__PURE__ */ new Set();
     let successfulRoutes = 0;
     let emptyRouteCount = 0;
+    let blockedByLicense = null;
     let routeCount = 0;
     let totalCandidates = 0;
     let completionText = "\u6383\u63CF\u672A\u5B8C\u6210";
@@ -1826,6 +1973,14 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
     setCancelEnabled(true);
     setPanelWorking(true, "\u6E96\u5099\u6383\u63CF\u6240\u6709\u8DEF\u6BB5\u5206\u9801");
     updateRouteProgress();
+    const stopWatchdog = startCoreAccessWatchdog({
+      signal,
+      onBlocked: (status) => {
+        blockedByLicense = status;
+        setPanelStatus(status.message || "\u6388\u6B0A\u72C0\u614B\u5DF2\u8B8A\u66F4\uFF0C\u64F7\u53D6\u4E2D\u6B62");
+        controller.abort();
+      }
+    });
     try {
       const routeResult = await scanAllRoutePages({
         signal,
@@ -1962,7 +2117,14 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         failed: routeFailures.length
       });
     } catch (error) {
-      if (error?.name === "AbortError" || signal.aborted) {
+      if (blockedByLicense) {
+        completionText = [
+          blockedByLicense.message || "\u6388\u6B0A\u72C0\u614B\u5DF2\u8B8A\u66F4\uFF0C\u64F7\u53D6\u4E2D\u6B62",
+          `\u4E2D\u6B62\u524D\u5DF2\u5B8C\u6210\u5206\u9801\uFF1A${successfulRoutes}`,
+          `\u5DF2\u64F7\u53D6\u4F46\u672A\u532F\u51FA\uFF1A${allUrls.length}`
+        ].join("\n");
+        updatePanelProgress(0, 0, { title: "\u5DF2\u4E2D\u6B62", stage: "\u6388\u6B0A\u72C0\u614B\u5DF2\u8B8A\u66F4" });
+      } else if (error?.name === "AbortError" || signal.aborted) {
         const uniqueUrls = normalizePdfUrls(allUrls);
         const partialFailures = allItemFailures.map((failure) => ({
           stage: "PDF extraction",
@@ -1984,6 +2146,7 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         log("\u5168\u90E8\u8DEF\u6BB5\u6383\u63CF\u5931\u6557", error);
       }
     } finally {
+      stopWatchdog();
       controller.abort();
       legacyExtractorState.abortController = null;
       legacyExtractorState.cancelRequested = false;
@@ -1997,80 +2160,6 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       }
       if (databaseButton) databaseButton.disabled = originalDatabaseButtonDisabled;
     }
-  }
-
-  // src/license.js
-  var LICENSE_CACHE_TTL_MS = 30 * 60 * 1e3;
-  var lastLicenseCheck = null;
-  function taiwanDateString() {
-    return new Date(Date.now() + 8 * 60 * 60 * 1e3).toISOString().slice(0, 10);
-  }
-  function isExpiredLicenseDate(expiresOn) {
-    return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || "")) || taiwanDateString() > expiresOn;
-  }
-  async function hasFreshLicenseCache(installId) {
-    const stored = await chrome.storage.local.get([
-      "license_status",
-      "qr_licensed_install_id",
-      "last_verified_at",
-      "license_expires_on"
-    ]);
-    if (stored.license_status !== "valid" || stored.qr_licensed_install_id !== installId) {
-      return false;
-    }
-    if (isExpiredLicenseDate(stored.license_expires_on)) {
-      lastLicenseCheck = { reason: "expired", expires_on: stored.license_expires_on || null };
-      await chrome.storage.local.set({ license_status: "invalid" });
-      return false;
-    }
-    const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
-    return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
-  }
-  async function hasValidLicense() {
-    try {
-      const stored = await chrome.storage.local.get(["install_id"]);
-      if (!stored.install_id) return false;
-      if (await hasFreshLicenseCache(stored.install_id)) {
-        return true;
-      }
-      const statusUrl = `${LICENSE_STATUS_API}?product_id=${encodeURIComponent(PRODUCT_ID)}&install_id=${encodeURIComponent(stored.install_id)}`;
-      const res = await fetch(statusUrl);
-      const result = await res.json();
-      if (result && result.success && result.active) {
-        lastLicenseCheck = result;
-        await chrome.storage.local.set({
-          license_status: "valid",
-          qr_licensed_install_id: stored.install_id,
-          last_verified_at: (/* @__PURE__ */ new Date()).toISOString(),
-          license_expires_on: result.expires_on
-        });
-        return true;
-      }
-      lastLicenseCheck = result;
-      await chrome.storage.local.set({
-        license_status: "invalid",
-        license_expires_on: result?.expires_on || null
-      });
-      return false;
-    } catch {
-      const stored = await chrome.storage.local.get(["install_id"]);
-      return !!stored.install_id && await hasFreshLicenseCache(stored.install_id);
-    }
-  }
-  async function requireLicenseForPremiumAction() {
-    const ok = await hasValidLicense();
-    if (ok) return true;
-    if (lastLicenseCheck?.reason === "expired") {
-      const expiresOn = lastLicenseCheck.expires_on || "\u8A2D\u5B9A\u671F\u9650";
-      alert(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\u3002
-
-\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u91CD\u65B0\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002`);
-      setPanelStatus(`\u6388\u6B0A\u5DF2\u65BC ${expiresOn} \u5230\u671F\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A`);
-      return false;
-    }
-    alert("\u6B64\u529F\u80FD\u9700\u8981 QR \u6388\u6B0A\u5F8C\u624D\u80FD\u4F7F\u7528\u3002\n\n\u8ACB\u6253\u958B\u64F4\u5145\u5DE5\u5177 popup\uFF0C\u7522\u751F QR Code \u4E26\u8ACB\u7BA1\u7406\u54E1\u6838\u51C6\u3002");
-    setPanelStatus("\u5C1A\u672A QR \u6388\u6B0A\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u9396\u5B9A");
-    return false;
   }
 
   // src/database-scanner.js
@@ -2318,6 +2407,7 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       filteredSkipped: 0
     };
     let completionText = "\u8CC7\u6599\u5EAB\u6383\u63CF\u672A\u5B8C\u6210";
+    let blockedByLicense = null;
     databaseExtractorState.running = true;
     databaseExtractorState.cancelRequested = false;
     databaseExtractorState.abortController = controller;
@@ -2328,6 +2418,13 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
     setProgressMode("database");
     setPanelWorking(true, "\u6B63\u5728\u6536\u96C6\u6240\u6709\u8DEF\u6BB5\u6236\u5225");
     databaseProgress(metrics, { phase: "\u6536\u96C6\u6236\u5225" });
+    const stopWatchdog = startCoreAccessWatchdog({
+      signal,
+      onBlocked: (status) => {
+        blockedByLicense = status;
+        controller.abort();
+      }
+    });
     try {
       const routeResult = await scanAllRoutePages({
         signal,
@@ -2491,7 +2588,11 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
       databaseProgress(metrics, { phase: "\u8CC7\u6599\u5EAB\u5EFA\u7ACB\u5B8C\u6210" });
     } catch (error) {
       databaseExtractorState.lastFailures = failures;
-      if (error?.name === "AbortError" || signal.aborted) {
+      if (blockedByLicense) {
+        completionText = `${blockedByLicense.message || "\u6388\u6B0A\u72C0\u614B\u5DF2\u8B8A\u66F4"}
+\u4E2D\u6B62\u524D\u5DF2\u8655\u7406\u6236\u5225\uFF1A${metrics.processedHouseholds} / ${metrics.totalHouseholds}`;
+        databaseProgress(metrics, { phase: "\u6388\u6B0A\u72C0\u614B\u5DF2\u8B8A\u66F4\uFF0C\u5DF2\u4E2D\u6B62" });
+      } else if (error?.name === "AbortError" || signal.aborted) {
         completionText = `\u8CC7\u6599\u5EAB\u6383\u63CF\u5DF2\u53D6\u6D88
 \u5DF2\u8655\u7406\u6236\u5225\uFF1A${metrics.processedHouseholds} / ${metrics.totalHouseholds}`;
         databaseProgress(metrics, { phase: "\u5DF2\u53D6\u6D88" });
@@ -2501,6 +2602,7 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         databaseProgress(metrics, { phase: "\u6383\u63CF\u4E2D\u6B62" });
       }
     } finally {
+      stopWatchdog();
       controller.abort();
       databaseExtractorState.abortController = null;
       databaseExtractorState.running = false;
@@ -2578,7 +2680,10 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         if (databaseExtractorState.running) cancelDatabaseScan();
         if (legacyExtractorState.running) cancelLegacyScan();
       },
-      onExportFailures: () => exportLastDatabaseFailures()
+      onExportFailures: async () => {
+        if (!await requireLicenseForPremiumAction()) return;
+        exportLastDatabaseFailures();
+      }
     });
   }
   function bindRuntimeMessages() {

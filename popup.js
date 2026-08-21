@@ -3,10 +3,12 @@ import {
   DISCLAIMER_VERSION,
   getDisclaimerAccepted
 } from './src/disclaimer.js';
-
-const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
-const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
-const PRODUCT_ID = 'ycut_extractor';
+import {
+  LICENSE_REQUEST_API,
+  LICENSE_STATUS_API,
+  PRODUCT_ID
+} from './src/config.js';
+import { createQrDataUrl } from './src/local-qr.mjs';
 
 const QR_LIFETIME_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 5000;
@@ -219,11 +221,11 @@ async function checkQrLicenseStatus() {
   return false;
 }
 
-function setQrImage(approveUrl) {
+async function setQrImage(approveUrl) {
   const qr = $('licenseQr');
   if (!qr) return;
 
-  qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(approveUrl);
+  qr.src = await createQrDataUrl(approveUrl, 240);
 }
 
 function updateQrTimer() {
@@ -278,7 +280,7 @@ async function createOrRefreshQrCode(statusMessage = '') {
       return;
     }
 
-    setQrImage(data.telegram_url || data.approve_url);
+    await setQrImage(data.telegram_url || data.approve_url);
     qrExpireAt = Date.now() + QR_LIFETIME_MS;
     setStatus(statusMessage || '請管理員掃描 QR Code，並在 Telegram 輸入備註與到期日後核准。', true);
 
