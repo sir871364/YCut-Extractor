@@ -8,6 +8,7 @@ import {
   LICENSE_STATUS_API,
   PRODUCT_ID
 } from './src/config.js';
+import { readAccountPolicy, ACCOUNT_REQUIRED_MESSAGE } from './src/core-access.js';
 import { createQrDataUrl } from './src/local-qr.mjs';
 
 const QR_LIFETIME_MS = 5 * 60 * 1000;
@@ -22,6 +23,8 @@ let pollTimerId = null;
 let lastLicenseCheck = null;
 let licenseAuthorized = false;
 let disclaimerAccepted = false;
+// 伺服器下達的帳號綁定政策；沒查過或沒送就是 optional
+let lastAccountPolicy = { trial: 'optional', license: 'optional' };
 
 function setStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -142,8 +145,8 @@ async function getChromeGoogleAccount() {
   });
 }
 
-function googleAccountRequiredMessage() {
-  return '請先在 Chrome 登入 Google 帳號，才能產生授權 QR Code。已授權的電腦不受影響。';
+function accountRequiredMessage() {
+  return ACCOUNT_REQUIRED_MESSAGE + '\n\n登入後才能產生授權 QR Code。';
 }
 
 function taiwanDateString() {
@@ -194,6 +197,7 @@ async function checkQrLicenseStatus() {
 
   const res = await fetch(url);
   const data = await res.json();
+  lastAccountPolicy = readAccountPolicy(data);
 
   if (data && data.success && data.active) {
     lastLicenseCheck = data;
@@ -252,6 +256,14 @@ async function createOrRefreshQrCode(statusMessage = '') {
   });
 
   setToolEnabled(false);
+
+  // 政策要求正式授權綁帳號時，沒帳號就不送申請、不顯示 QR
+  if (lastAccountPolicy.license === 'required' && !googleAccount) {
+    stopAuthorizationUi();
+    showLicensePanel(accountRequiredMessage());
+    return;
+  }
+
   const licenseRequestBody = {
     install_id: installId,
     product_id: PRODUCT_ID

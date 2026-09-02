@@ -1,7 +1,7 @@
 // Authorization logic — DO NOT MODIFY
 import { LICENSE_STATUS_API, PRODUCT_ID } from "./config.js";
 import { setPanelStatus } from "./panel.js";
-import { classifyCoreLicenseStatus } from "./core-access.js";
+import { classifyCoreLicenseStatus, readAccountPolicy, ACCOUNT_REQUIRED_MESSAGE } from "./core-access.js";
 
 const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
 const CORE_AUTH_TIMEOUT_MS = 8000;
@@ -74,6 +74,21 @@ export async function hasValidLicense() {
   }
 }
 
+// content script 拿不到 chrome.identity，改請 background 代查；
+// background 回不了話時退回 popup 產生 QR 時存下的 google_account。兩邊都沒有就當沒登入。
+async function getBrowserAccount() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "YCUT_GET_ACCOUNT" });
+    if (res && res.google_sub && res.google_email) return res;
+  } catch {}
+  try {
+    const stored = await chrome.storage.local.get(["google_account"]);
+    const acct = stored.google_account;
+    if (acct && acct.google_sub && acct.google_email) return acct;
+  } catch {}
+  return null;
+}
+
 /**
  * 即時向授權服務查詢一次核心狀態。永遠不丟例外：
  * 任何錯誤、逾時或格式異常都收斂成 unavailable，由呼叫端決定如何處置。
@@ -93,6 +108,14 @@ export async function fetchCoreAccessDecision() {
     const result = await response.json();
     const status = classifyCoreLicenseStatus(result);
     if (status.decision === "unavailable") throw new Error("Invalid license status response");
+    // 緊急停止優先於帳號政策：停用中要看到「已停用」，不是「請登入」
+    if (status.decision === "suspended") return { ...status, result };
+
+    // 伺服器下達的帳號綁定政策；欄位不存在＝optional＝行為與現在相同
+    const policy = readAccountPolicy(result);
+    if (policy.license === "required" && !(await getBrowserAccount())) {
+      return { decision: "account_required", message: ACCOUNT_REQUIRED_MESSAGE, result };
+    }
     return { ...status, result };
   } catch {
     return { decision: "unavailable", message: "目前無法確認授權狀態，請稍後再試。", result: null };
@@ -137,6 +160,12 @@ export async function requireLicenseForPremiumAction() {
   if (status.decision === "suspended") {
     alert(status.message);
     setPanelStatus("系統管理員已暫停 PDF / JSON 擷取功能");
+    return false;
+  }
+
+  if (status.decision === "account_required") {
+    alert(status.message);
+    setPanelStatus("請先登入瀏覽器帳號，PDF / JSON 下載已暫停");
     return false;
   }
 

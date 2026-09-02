@@ -26,3 +26,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   });
 });
+
+// content script 沒有 chrome.identity，帳號綁定政策需要時由這裡代查。
+// 與上面的 AUTOCONFIRM 監聽器各管各的訊息型別，互不影響。
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'YCUT_GET_ACCOUNT') return;
+  if (!chrome.identity || !chrome.identity.getProfileUserInfo) { sendResponse(null); return; }
+  chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (info) => {
+    if (chrome.runtime.lastError || !info || !info.id || !info.email) { sendResponse(null); return; }
+    sendResponse({ google_sub: info.id, google_email: info.email });
+  });
+  return true; // 非同步回覆
+});

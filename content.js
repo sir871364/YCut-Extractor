@@ -1549,6 +1549,15 @@
     }
     return { decision: "unlicensed", message: "" };
   }
+  function readAccountPolicy(data) {
+    const raw = data && typeof data === "object" && data.account_policy && typeof data.account_policy === "object" ? data.account_policy : null;
+    const norm = (value) => value === "required" ? "required" : "optional";
+    return {
+      trial: norm(raw ? raw.trial : void 0),
+      license: norm(raw ? raw.license : void 0)
+    };
+  }
+  var ACCOUNT_REQUIRED_MESSAGE = "\u8ACB\u5148\u767B\u5165\u700F\u89BD\u5668\u5E33\u865F\uFF08Chrome \u7528 Google\u3001Edge \u7528 Microsoft\uFF09\uFF0C\u518D\u91CD\u65B0\u958B\u555F\u64F4\u5145\u529F\u80FD\u3002";
 
   // src/license.js
   var LICENSE_CACHE_TTL_MS = 30 * 60 * 1e3;
@@ -1610,6 +1619,20 @@
       return !!stored.install_id && await hasFreshLicenseCache(stored.install_id);
     }
   }
+  async function getBrowserAccount() {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "YCUT_GET_ACCOUNT" });
+      if (res && res.google_sub && res.google_email) return res;
+    } catch {
+    }
+    try {
+      const stored = await chrome.storage.local.get(["google_account"]);
+      const acct = stored.google_account;
+      if (acct && acct.google_sub && acct.google_email) return acct;
+    } catch {
+    }
+    return null;
+  }
   async function fetchCoreAccessDecision() {
     const stored = await chrome.storage.local.get(["install_id"]);
     if (!stored.install_id) {
@@ -1624,6 +1647,11 @@
       const result = await response.json();
       const status = classifyCoreLicenseStatus(result);
       if (status.decision === "unavailable") throw new Error("Invalid license status response");
+      if (status.decision === "suspended") return { ...status, result };
+      const policy = readAccountPolicy(result);
+      if (policy.license === "required" && !await getBrowserAccount()) {
+        return { decision: "account_required", message: ACCOUNT_REQUIRED_MESSAGE, result };
+      }
       return { ...status, result };
     } catch {
       return { decision: "unavailable", message: "\u76EE\u524D\u7121\u6CD5\u78BA\u8A8D\u6388\u6B0A\u72C0\u614B\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66\u3002", result: null };
@@ -1661,6 +1689,11 @@
     if (status.decision === "suspended") {
       alert(status.message);
       setPanelStatus("\u7CFB\u7D71\u7BA1\u7406\u54E1\u5DF2\u66AB\u505C PDF / JSON \u64F7\u53D6\u529F\u80FD");
+      return false;
+    }
+    if (status.decision === "account_required") {
+      alert(status.message);
+      setPanelStatus("\u8ACB\u5148\u767B\u5165\u700F\u89BD\u5668\u5E33\u865F\uFF0CPDF / JSON \u4E0B\u8F09\u5DF2\u66AB\u505C");
       return false;
     }
     if (status.decision === "licensed") return true;

@@ -34,4 +34,33 @@ for (const file of ['extractor.js', 'database-scanner.js']) {
   assert.match(source, /stopWatchdog\(\)/, file);
 }
 
+// ---- 帳號綁定政策（伺服器下達、擴充先行部署）----
+// 最重要：伺服器沒送 account_policy 時必須全部 optional，否則一部署就有人被誤擋。
+// vm 跑在另一個 realm，回傳物件的原型不是本 realm 的 Object.prototype，
+// assert/strict 的 deepEqual 會判「結構相同但不相等」。攤平成本 realm 的物件再比。
+const readPolicy = (d) => ({ ...context.readAccountPolicy(d) });
+assert.deepEqual(readPolicy({}), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy(null), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy({ account_policy: { license: 'REQUIRED' } }), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy({ account_policy: { license: 'required' } }), { trial: 'optional', license: 'required' });
+
+// 閘門與看門狗共用 fetchCoreAccessDecision，政策接在那裡就同時涵蓋兩者
+{
+  const fn = licenseJs.slice(licenseJs.indexOf('export async function fetchCoreAccessDecision'),
+    licenseJs.indexOf('export function startCoreAccessWatchdog'));
+  // 緊急停止優先於政策
+  assert.ok(fn.indexOf('status.decision === "suspended"') < fn.indexOf('readAccountPolicy(result)'));
+  assert.match(fn, /policy\.license === "required" && !\(await getBrowserAccount\(\)\)/);
+  assert.match(fn, /decision: "account_required"/);
+}
+assert.match(licenseJs, /requireLicenseForPremiumAction[\s\S]{0,400}?status\.decision === "account_required"/);
+// content script 拿不到 identity，必須由 background 代查
+const backgroundJs = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+assert.match(backgroundJs, /YCUT_GET_ACCOUNT/);
+assert.match(backgroundJs, /getProfileUserInfo\(\{ accountStatus: 'ANY' \}/);
+// popup 申請 QR 也看政策
+const popupJs = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
+assert.match(popupJs, /lastAccountPolicy = readAccountPolicy\(data\)/);
+assert.match(popupJs, /lastAccountPolicy\.license === 'required' && !googleAccount/);
+
 console.log('YCut kill-switch checks passed.');
