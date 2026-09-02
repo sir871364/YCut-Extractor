@@ -51,7 +51,8 @@ function mountPanelWithHandlers() {
       if (!(await requireLicenseForPremiumAction())) return;
       setProgressMode("legacy");
       await scanAllRoutes({
-        delayBetween: CONFIG.DELAY_BETWEEN_MS,
+        delayMinMs: CONFIG.DELAY_BETWEEN_MIN_MS,
+        delayMaxMs: CONFIG.DELAY_BETWEEN_MAX_MS,
         collapseAfter: true,
         perItemTimeout: CONFIG.PER_ITEM_TIMEOUT_MS,
         retries: CONFIG.MAX_RETRIES_PER_ITEM,

@@ -20,6 +20,17 @@ import {
   updateRouteProgress
 } from "./panel.js";
 
+// 擷取路徑目前為「純模擬人工點擊」：點擊失敗就算失敗，不回頭走 API。
+// 想恢復 API 後援把這個改成 true 即可（建立PDF資料庫不受此旗標影響，仍為純 API）。
+const EXTRACT_API_FALLBACK = false;
+
+/** 回傳 [min, max] 區間內的隨機毫秒數 */
+function randomDelayMs(minMs, maxMs) {
+  const low = Math.max(0, Math.min(minMs, maxMs));
+  const high = Math.max(minMs, maxMs);
+  return Math.round(low + Math.random() * (high - low));
+}
+
 function followAnchor(anchor) {
   if (!STATE.autoFollow || document.hidden) return;
   const cell = anchor?.closest?.("td");
@@ -89,7 +100,8 @@ function getHouseholdKey(anchor, routeValue) {
 }
 
 export async function scanCurrentRoute({
-  delayBetween = CONFIG.DELAY_BETWEEN_MS,
+  delayMinMs = CONFIG.DELAY_BETWEEN_MIN_MS,
+  delayMaxMs = CONFIG.DELAY_BETWEEN_MAX_MS,
   collapseAfter = true,
   perItemTimeout = CONFIG.PER_ITEM_TIMEOUT_MS,
   retries = CONFIG.MAX_RETRIES_PER_ITEM,
@@ -144,17 +156,7 @@ export async function scanCurrentRoute({
     });
     await waitForPageIdle(perItemTimeout);
 
-    try {
-      updatePanelProgress(idx, total, {
-        title: "擷取 PDF 中",
-        current,
-        stage: "嘗試 API 擷取"
-      });
-      got = (await getPdfByApi(a)).url;
-    } catch (e) {
-      lastError = e?.message || "API 擷取失敗";
-    }
-
+    // 主路徑：先模擬人工點擊（開小人選單 → 明細視窗 → 抓 PDF 連結）
     for (let attempt = 0; attempt <= retries && !got; attempt++) {
       let modal = null;
       try {
@@ -196,6 +198,20 @@ export async function scanCurrentRoute({
       }
     }
 
+    // 後援：模擬點擊全數失敗才改走 API（目前預設關閉）
+    if (!got && EXTRACT_API_FALLBACK) {
+      try {
+        updatePanelProgress(idx, total, {
+          title: "擷取 PDF 中",
+          current,
+          stage: "模擬點擊失敗，改用 API 後援"
+        });
+        got = (await getPdfByApi(a)).url;
+      } catch (e) {
+        lastError = e?.message || "API 擷取失敗";
+      }
+    }
+
     if (got && isValidPdfHref(got)) {
       urls.push(got);
       markAnchorExtractionState(a, "done");
@@ -210,8 +226,16 @@ export async function scanCurrentRoute({
       stage: got && isValidPdfHref(got) ? "此戶完成" : "此戶失敗"
     });
     onItemComplete?.({ found: urls.length, failed: failed.length, done: idx + 1, total });
-    // 每戶之間的等待是取消最容易生效的點（預設 2 秒），用可中斷的版本
-    if (idx + 1 < total) await waitWithSignal(delayBetween, signal);
+    // 每戶之間改為隨機間隔；這也是取消最容易生效的點，用可中斷的版本
+    if (idx + 1 < total) {
+      const waitMs = randomDelayMs(delayMinMs, delayMaxMs);
+      updatePanelProgress(idx + 1, total, {
+        title: "擷取 PDF 中",
+        current,
+        stage: `等待 ${(waitMs / 1000).toFixed(1)} 秒後處理下一戶`
+      });
+      await waitWithSignal(waitMs, signal);
+    }
   }
 
   return {

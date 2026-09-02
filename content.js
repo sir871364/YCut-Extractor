@@ -36,7 +36,9 @@
     dropdown: "ul.dropdown-menu"
   };
   var CONFIG = {
-    DELAY_BETWEEN_MS: 2e3,
+    // 每戶之間的間隔改為隨機區間（平均 3 秒，比原本固定 2 秒更慢）
+    DELAY_BETWEEN_MIN_MS: 1e3,
+    DELAY_BETWEEN_MAX_MS: 5e3,
     PER_ITEM_TIMEOUT_MS: 3e4,
     MAX_RETRIES_PER_ITEM: 2,
     ROUTE_REFRESH_TIMEOUT_MS: 3e4,
@@ -1762,6 +1764,12 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
   }
 
   // src/extractor.js
+  var EXTRACT_API_FALLBACK = false;
+  function randomDelayMs(minMs, maxMs) {
+    const low = Math.max(0, Math.min(minMs, maxMs));
+    const high = Math.max(minMs, maxMs);
+    return Math.round(low + Math.random() * (high - low));
+  }
   function followAnchor(anchor) {
     if (!STATE.autoFollow || document.hidden) return;
     const cell = anchor?.closest?.("td");
@@ -1818,7 +1826,8 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
     return `fallback:${routeValue}:${describeAnchor(anchor)}`;
   }
   async function scanCurrentRoute({
-    delayBetween = CONFIG.DELAY_BETWEEN_MS,
+    delayMinMs = CONFIG.DELAY_BETWEEN_MIN_MS,
+    delayMaxMs = CONFIG.DELAY_BETWEEN_MAX_MS,
     collapseAfter = true,
     perItemTimeout = CONFIG.PER_ITEM_TIMEOUT_MS,
     retries = CONFIG.MAX_RETRIES_PER_ITEM,
@@ -1867,16 +1876,6 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         stage: "\u7B49\u5F85\u9801\u9762\u9592\u7F6E"
       });
       await waitForPageIdle(perItemTimeout);
-      try {
-        updatePanelProgress(idx, total, {
-          title: "\u64F7\u53D6 PDF \u4E2D",
-          current,
-          stage: "\u5617\u8A66 API \u64F7\u53D6"
-        });
-        got = (await getPdfByApi(a)).url;
-      } catch (e) {
-        lastError = e?.message || "API \u64F7\u53D6\u5931\u6557";
-      }
       for (let attempt = 0; attempt <= retries && !got; attempt++) {
         let modal = null;
         try {
@@ -1914,6 +1913,18 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
           if (collapseAfter) await closeAfterExtraction(a, modal);
         }
       }
+      if (!got && EXTRACT_API_FALLBACK) {
+        try {
+          updatePanelProgress(idx, total, {
+            title: "\u64F7\u53D6 PDF \u4E2D",
+            current,
+            stage: "\u6A21\u64EC\u9EDE\u64CA\u5931\u6557\uFF0C\u6539\u7528 API \u5F8C\u63F4"
+          });
+          got = (await getPdfByApi(a)).url;
+        } catch (e) {
+          lastError = e?.message || "API \u64F7\u53D6\u5931\u6557";
+        }
+      }
       if (got && isValidPdfHref(got)) {
         urls.push(got);
         markAnchorExtractionState(a, "done");
@@ -1927,7 +1938,15 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         stage: got && isValidPdfHref(got) ? "\u6B64\u6236\u5B8C\u6210" : "\u6B64\u6236\u5931\u6557"
       });
       onItemComplete?.({ found: urls.length, failed: failed.length, done: idx + 1, total });
-      if (idx + 1 < total) await waitWithSignal(delayBetween, signal);
+      if (idx + 1 < total) {
+        const waitMs = randomDelayMs(delayMinMs, delayMaxMs);
+        updatePanelProgress(idx + 1, total, {
+          title: "\u64F7\u53D6 PDF \u4E2D",
+          current,
+          stage: `\u7B49\u5F85 ${(waitMs / 1e3).toFixed(1)} \u79D2\u5F8C\u8655\u7406\u4E0B\u4E00\u6236`
+        });
+        await waitWithSignal(waitMs, signal);
+      }
     }
     return {
       urls,
@@ -2664,7 +2683,8 @@ ${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
         if (!await requireLicenseForPremiumAction()) return;
         setProgressMode("legacy");
         await scanAllRoutes({
-          delayBetween: CONFIG.DELAY_BETWEEN_MS,
+          delayMinMs: CONFIG.DELAY_BETWEEN_MIN_MS,
+          delayMaxMs: CONFIG.DELAY_BETWEEN_MAX_MS,
           collapseAfter: true,
           perItemTimeout: CONFIG.PER_ITEM_TIMEOUT_MS,
           retries: CONFIG.MAX_RETRIES_PER_ITEM,

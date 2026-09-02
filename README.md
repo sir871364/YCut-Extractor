@@ -30,7 +30,7 @@
 - 透過 `content.js` 注入網頁腳本
 - 透過 `popup.html` 提供操作介面
 - 使用 `background.js` 處理背景邏輯
-- 支援 JSZip 壓縮 / 匯出功能
+- 匯出 PDF 連結清單與失敗紀錄（JSON）
 - 輕量化、免安裝、可直接載入未封裝項目
 
 ---
@@ -42,7 +42,7 @@
 | 平台 | Chrome Extension |
 | Manifest | Manifest V3 |
 | 前端 | HTML / CSS / JavaScript |
-| 壓縮處理 | JSZip |
+| QR 產生 | 本機產生（qrcode-generator）|
 | 背景執行 | Service Worker |
 | 設定檔 | manifest.json |
 
@@ -59,8 +59,7 @@ YCut-Extractor/
 ├── popup.js
 ├── content.css
 ├── lib/
-│   ├── jszip.js
-│   └── jszip.min.js
+│   └── qrcode-generator.mjs
 ├── icons/
 │   └── icon128.png
 └── screenshots/

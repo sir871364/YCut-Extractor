@@ -5,7 +5,9 @@ export const SEL = {
 };
 
 export const CONFIG = {
-  DELAY_BETWEEN_MS: 2000,
+  // 每戶之間的間隔改為隨機區間（平均 3 秒，比原本固定 2 秒更慢）
+  DELAY_BETWEEN_MIN_MS: 1000,
+  DELAY_BETWEEN_MAX_MS: 5000,
   PER_ITEM_TIMEOUT_MS: 30000,
   MAX_RETRIES_PER_ITEM: 2,
   ROUTE_REFRESH_TIMEOUT_MS: 30000,
